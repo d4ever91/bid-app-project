@@ -1,0 +1,32 @@
+:root {
+  --ink: #14171a;
+  --muted: #6d7580;
+  --faint: #9aa1a8;
+  --line: #dfe2e3;
+  --hair: #eef0ef;
+  --bg: #f2f3f2;
+  --panel: #ffffff;
+  --accent: #0d7a6a;
+  --accent-dark: #095a4e;
+  --sans: 'IBM Plex Sans', Helvetica, Arial, sans-serif;
+  --mono: 'IBM Plex Mono', ui-monospace, monospace;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; background: var(--bg); }
+body { font-family: var(--sans); color: var(--ink); -webkit-font-smoothing: antialiased; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { color: var(--accent-dark); text-decoration: underline; }
+input, select, button, textarea { font: inherit; color: inherit; }
+::selection { background: #cdeae2; }
+
+/* Interaction states — the only rules that cannot be inline */
+.field:focus { border-color: var(--accent); background: #fff; outline: none; }
+.btn-dark:hover { background: var(--accent); }
+.btn-ghost:hover { border-color: var(--ink); }
+.row:hover { background: #fafbfa; }
+.bar:hover { background: var(--accent); }
+.nav-item:hover { color: #fff; }
+.link-btn:hover { color: var(--accent); }
+.clear-btn:hover { border-color: #b23a3a; color: #b23a3a; }
+.nav-toggle:hover { color: #fff; border-color: #3a4142; }
