@@ -13,8 +13,14 @@ const serverDir = path.join(root, 'server');
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const shell = process.platform === 'win32';
 
-if (!fs.existsSync(path.join(serverDir, 'node_modules'))) {
-  console.log('[dev] Installing API dependencies (first run)…');
+// Install when node_modules is missing or any dependency in server/package.json isn't there
+// (e.g. after a pull that added a package).
+const serverPkg = JSON.parse(fs.readFileSync(path.join(serverDir, 'package.json'), 'utf8'));
+const missing = Object.keys(serverPkg.dependencies ?? {}).filter(
+  (dep) => !fs.existsSync(path.join(serverDir, 'node_modules', dep, 'package.json'))
+);
+if (missing.length) {
+  console.log(`[dev] Installing API dependencies (${missing.join(', ')})…`);
   const install = spawnSync(npm, ['install'], { cwd: serverDir, stdio: 'inherit', shell });
   if (install.status !== 0) {
     console.error('[dev] Could not install API dependencies — run `npm --prefix server install` and try again.');
