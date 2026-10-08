@@ -6,8 +6,7 @@ typed component events.
 ## Run
 
     npm install
-    npm run db:up               # MongoDB on :27017 (Docker) — or set MONGODB_URI, see below
-    npm run dev                 # API on :4000 + app on :5173, together
+    npm run dev                 # MongoDB + API on :4000 + app on :5173, together
 
 `npm run dev` starts both the API (`server/`) and the Vite app, and installs the API's
 dependencies the first time. Ctrl+C stops both. To run them separately: `npm run api` and
@@ -42,10 +41,18 @@ Scripts (run from the repo root, or inside `server/` without the `api:` prefix):
 `npm run api` (dev, `tsx watch`), `npm run api:build` (compile to `server/dist`),
 `npm run api:start` (run the build), `npm run api:typecheck`, `npm run api:test`, `npm run api:seed`.
 
-**MongoDB setup.** Either run it locally with Docker (`npm run db:up`, uses
-`docker-compose.yml`), or point the API at any MongoDB — e.g. a free MongoDB Atlas cluster —
-by setting `MONGODB_URI` in `server/.env` (copy `server/.env.example`). The default is
-`mongodb://127.0.0.1:27017/ordinal_bids`.
+**MongoDB setup — nothing to install.** The default is a MongoDB on this machine
+(`mongodb://127.0.0.1:27017/ordinal_bids`). If nothing is listening there, `npm run dev`
+starts one itself (`server/scripts/local-mongo.mjs`): it downloads the official MongoDB
+server once (~70 MB, cached in `~/.cache/mongodb-binaries`) and keeps the data in
+`server/.mongo-data/` (git-ignored), so it survives restarts. Run it on its own with
+`npm run db:up`.
+
+Prefer something else? Any of these work — `npm run dev` uses whatever is already running:
+
+- MongoDB installed on the machine (`mongod` on port 27017)
+- Docker: `npm run db:docker` (uses `docker-compose.yml`)
+- MongoDB Atlas (free tier): put its connection string in `server/.env` as `MONGODB_URI`
 
 **Seeding.** On start, if the database has no workspaces, the API seeds all the demo data:
 2 workspaces (with billing details and usage), 14 users (with profiles and notification

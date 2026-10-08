@@ -1,4 +1,4 @@
-# Local MongoDB for the API.  Start:  npm run db:up   (or: docker compose up -d mongo)
+# Optional: MongoDB in Docker.  Start: npm run db:docker   (without Docker, `npm run dev` starts a local MongoDB itself)
 services:
   mongo:
     image: mongo:7.0

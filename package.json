@@ -16,8 +16,9 @@
     "api:typecheck": "npm --prefix server run typecheck",
     "api:seed": "npm --prefix server run seed",
     "api:test": "npm --prefix server test",
-    "db:up": "docker compose up -d mongo",
-    "db:down": "docker compose stop mongo"
+    "db:up": "node server/scripts/local-mongo.mjs",
+    "db:docker": "docker compose up -d mongo",
+    "db:docker:down": "docker compose stop mongo"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^3.1.1",
