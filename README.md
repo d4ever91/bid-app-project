@@ -31,7 +31,7 @@ typed component events.
         UserDetail.svelte        profile, role change, security, activity
         InviteUser.svelte        invite form with role picker
         Assistant.svelte         AI chat screen
-        Signup.svelte            two-step workspace signup + plan choice
+        Signup.svelte            three-step signup: account → company questions → plan
         NewUser.svelte           create/invite a user (shared form, two modes)
         NewBid.svelte            log a new bid opportunity
       icons.ts                   inline SVG bodies for the sidebar
@@ -62,9 +62,19 @@ Opening a bid gives its submission checklist, bid log, readiness bars, and key f
 
 ## Signup & shell
 
-\`Login\` links to a two-step **Signup**: workspace details (validated — required fields, email
-shape, 12-character password) then plan choice with terms acceptance. Completing it seeds the
-plan and the signed-in name, then drops into Overview.
+\`Login\` links to a three-step **Signup**:
+
+1. **Your account** — workspace name, domain, name, work email, password (validated — required
+   fields, email shape, 12-character password).
+2. **Your company** — six short questions: your role, country, company type,
+   employees, sectors you bid into (multi-select) and bids per year. Options live in
+   \`src/types.ts\` (\`SIGNUP_ROLES\`, \`BID_SECTORS\`, …).
+3. **Choose a plan** — plan, seats, trial vs paid, terms acceptance.
+
+The answers are sent to \`POST /auth/signup\` as a \`company\` object (\`CompanyProfile\`), alongside
+the existing top-level \`size\` and \`companyType\` for backward compatibility. If the server
+rejects a field (\`role\` or \`company.role\`, etc.) the user is sent back to the step that holds it.
+Completing signup seeds the plan and the signed-in name, then drops into Overview.
 
 The sidebar carries inline SVG icons and collapses to a 56px icon rail via the « / » toggle;
 \`App.svelte\` owns \`collapsed\` and swaps the shell's grid column.
@@ -226,7 +236,7 @@ been **blurred**, or once the user has attempted to submit — a pristine form i
 wall of red. `src/lib/Field.svelte` renders label, input, red border and message together
 so every form errs identically.
 
-Wired into: Login, Signup (step 1), New user, New bid, Edit profile. Submit buttons are no
+Wired into: Login, Signup (steps 1 and 2), New user, New bid, Edit profile. Submit buttons are no
 longer disabled — clicking reveals what's wrong rather than leaving the user guessing why
 the button is dead.
 

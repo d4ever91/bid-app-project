@@ -146,14 +146,32 @@ export interface NewBidDraft {
 export const COMPANY_TYPES = ['Consultancy', 'Contractor', 'Agency', 'Public sector', 'Other'] as const;
 export type CompanyType = (typeof COMPANY_TYPES)[number];
 
-export interface SignupDraft {
+/* ---- Signup company questionnaire ---- */
+
+export const COMPANY_SIZES = ['1–50', '51–200', '201–500', '500+'] as const;
+export const SIGNUP_ROLES = ['Bid / proposal manager', 'Sales or BD lead', 'Operations', 'Founder / director', 'Other'] as const;
+export const BID_SECTORS = ['Healthcare', 'Transport', 'Utilities', 'Financial services', 'Education', 'Public sector', 'Construction', 'Technology', 'Other'] as const;
+export const BID_VOLUMES = ['1–10', '11–50', '51–200', '200+'] as const;
+
+export type SignupRole = (typeof SIGNUP_ROLES)[number];
+export type BidVolume = (typeof BID_VOLUMES)[number];
+
+/** Answers from the "About your company" step — sent to the API as `company`. */
+export interface CompanyProfile {
+  companyType: CompanyType;
+  size: string;
+  role: SignupRole | '';
+  country: string;
+  sectors: string[];
+  bidVolume: BidVolume | '';
+}
+
+export interface SignupDraft extends CompanyProfile {
   workspace: string;
   domain: string;
   name: string;
   email: string;
   password: string;
-  size: string;
-  companyType: CompanyType;
   plan: PlanId;
   accept: boolean;
 }

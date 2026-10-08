@@ -4,7 +4,10 @@
   import Field from './Field.svelte';
   import { runSchema, visible, errorCount, required, email, domain, minLen, maxLen, type Schema } from '../validation';
   import { PLANS as FALLBACK_PLANS, seatPrice, money } from '../subscription';
-  import type { BillingCycle, CompanyType, Plan, PlanId, SignupDraft } from '../types';
+  import {
+    COMPANY_TYPES, COMPANY_SIZES, SIGNUP_ROLES, BID_SECTORS, BID_VOLUMES,
+    type BillingCycle, type CompanyProfile, type Plan, type PlanId, type SignupDraft
+  } from '../types';
   import { onMount } from 'svelte';
 
   import { signup, fetchPlans, ApiError, type SessionUser } from '../api';
@@ -19,7 +22,6 @@
   let serverError: string | null = null;
   let serverFields: Record<string, string> = {};
 
-  const SIZES: string[] = ['1–50', '51–200', '201–500', '500+'];
   const FIELDS = [
     { key: 'workspace', label: 'Workspace name *', ph: 'Ordinal', type: 'text', mono: false },
     { key: 'domain', label: 'Company domain *', ph: 'ordinal.io', type: 'text', mono: true },
@@ -37,18 +39,22 @@
   let step = 1;
   let draft: SignupDraft = {
     workspace: '', domain: '', name: '', email: '', password: '',
-    size: '51–200', companyType: 'Consultancy', plan: 'business', accept: false
+    companyType: 'Consultancy', size: '51–200', role: '', country: '', sectors: [], bidVolume: '',
+    plan: 'business', accept: false
   };
 
-  const COMPANY_TYPE_OPTIONS: Array<{ id: CompanyType; note: string }> = [
-    { id: 'Consultancy', note: 'Advisory and professional services' },
-    { id: 'Contractor', note: 'Construction and infrastructure delivery' },
-    { id: 'Agency', note: 'Creative, media or marketing' },
-    { id: 'Public sector', note: "Government or arm's-length body" },
-    { id: 'Other', note: 'Something else' }
-  ];
+  /** Single-choice answer: clicking sets the value and marks the question answered. */
+  const pick = <K extends keyof CompanyProfile>(key: K, value: CompanyProfile[K]) => (): void => {
+    draft = { ...draft, [key]: value };
+    touched = { ...touched, [key]: true };
+  };
 
-  const pickType = (id: CompanyType): void => { draft = { ...draft, companyType: id }; };
+  /** Multi-choice answer: toggles the value in or out of the list. */
+  const toggle = (key: 'sectors', value: string) => (): void => {
+    const list = draft[key];
+    draft = { ...draft, [key]: list.includes(value) ? list.filter((v) => v !== value) : [...list, value] };
+    touched = { ...touched, [key]: true };
+  };
 
   // Billing selections live outside the draft — they're the payment step, not the profile.
   let cycle: BillingCycle = 'annual';
@@ -90,8 +96,8 @@
   let submitted = false;
   const touch = (key: string) => (): void => { touched = { ...touched, [key]: true }; };
 
-  // Step 1 fields only; the plan step has its own single check.
-  const schema: Schema<SignupDraft> = {
+  // Step 1 — the account.
+  const accountSchema: Schema<SignupDraft> = {
     workspace: [required('Name your workspace'), minLen(2), maxLen(40)],
     domain: [required('Your company domain is required'), domain()],
     name: [required('Enter your full name'), minLen(2), maxLen(80)],
@@ -99,15 +105,32 @@
     password: [required('Choose a password'), minLen(12, 'At least 12 characters'), maxLen(128)]
   };
 
-  $: errors = runSchema(draft, schema);
+  // Step 2 — the company questions.
+  const companySchema: Schema<SignupDraft> = {
+    role: [required('Tell us your role')],
+    country: [required('Where is your company based?'), maxLen(60)],
+    sectors: [required('Pick at least one sector')],
+    bidVolume: [required('Pick a range')]
+  };
+
+  const COMPANY_KEYS = ['companyType', 'size', ...Object.keys(companySchema)];
+
+  $: accountErrors = runSchema(draft, accountSchema);
+  $: companyErrors = runSchema(draft, companySchema);
+  $: errors = step === 1 ? accountErrors : step === 2 ? companyErrors : {};
   $: shown = { ...visible(errors, touched, submitted), ...serverFields };
-  $: stepOneValid = errorCount(errors) === 0;
+  $: stepValid = errorCount(errors) === 0;
 
   const next = (): void => {
     submitted = true;
-    if (!stepOneValid) return;
+    if (!stepValid) return;
     submitted = false;
-    step = 2;
+    step += 1;
+  };
+
+  const back = (): void => {
+    submitted = false;
+    step = Math.max(1, step - 1);
   };
 
   const create = async (): Promise<void> => {
@@ -121,6 +144,15 @@
     serverError = null;
     serverFields = {};
 
+    const company: CompanyProfile = {
+      companyType: draft.companyType,
+      size: draft.size,
+      role: draft.role,
+      country: draft.country.trim(),
+      sectors: draft.sectors,
+      bidVolume: draft.bidVolume
+    };
+
     try {
       const session = await signup({
         workspace: draft.workspace.trim(),
@@ -130,6 +162,7 @@
         password: draft.password,
         size: draft.size,
         companyType: draft.companyType,
+        company,
         plan: draft.plan,
         cycle,
         seats,
@@ -147,10 +180,12 @@
       if (err instanceof ApiError) {
         serverError = err.message;
         serverFields = err.fields;
-        // A rejected field lives on step 1 — send the user back to fix it.
-        if (Object.keys(err.fields).length) {
+        // Send the user back to whichever step holds the rejected field.
+        const keys = Object.keys(err.fields).map((k) => k.replace(/^company\./, ''));
+        if (keys.length) {
+          serverFields = Object.fromEntries(Object.entries(err.fields).map(([k, v]) => [k.replace(/^company\./, ''), v]));
           submitted = true;
-          step = 1;
+          step = keys.some((k) => k in accountSchema) ? 1 : keys.some((k) => COMPANY_KEYS.includes(k)) ? 2 : step;
         }
       } else {
         serverError = 'Something went wrong creating your workspace';
@@ -164,9 +199,15 @@
   const createOffline = (): void => dispatch('created', { draft, user: null });
 
   $: steps = [
-    { n: '1', text: 'Your workspace', on: step >= 1 },
-    { n: '2', text: 'Choose a plan', on: step >= 2 }
+    { n: '1', text: 'Your account', on: step >= 1 },
+    { n: '2', text: 'Your company', on: step >= 2 },
+    { n: '3', text: 'Choose a plan', on: step >= 3 }
   ];
+
+  // Shared chip styling for the question step.
+  const chip = (on: boolean): string =>
+    `padding: 7px 13px; border: 1px solid ${on ? 'var(--ink)' : 'var(--line)'}; background: ${on ? 'var(--ink)' : '#fff'}; color: ${on ? '#fff' : 'var(--muted)'}; border-radius: 3px; font-size: 12.5px; cursor: pointer;`;
+  const errText = `${mono} font-size: 11px; color: #932f2f; letter-spacing: 0.02em; margin-top: 7px;`;
 </script>
 
 <div style="min-height: 100vh; display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);">
@@ -209,39 +250,7 @@
           {/each}
         </div>
 
-        <div style="margin-top: 20px;">
-          <div style="{label} margin-bottom: 9px;">Company type</div>
-          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 8px;">
-            {#each COMPANY_TYPE_OPTIONS as t (t.id)}
-              <button
-                type="button"
-                on:click={() => pickType(t.id)}
-                style="text-align: left; background: {draft.companyType === t.id ? '#f4f8f7' : '#fff'}; border: 1px solid {draft.companyType === t.id ? 'var(--accent)' : 'var(--line)'}; border-radius: 3px; padding: 11px 13px; cursor: pointer; display: flex; gap: 10px; align-items: flex-start;"
-              >
-                <span style="width: 14px; height: 14px; flex: none; margin-top: 2px; border-radius: 50%; border: 1px solid {draft.companyType === t.id ? 'var(--accent)' : '#c3c8c9'}; background: {draft.companyType === t.id ? 'var(--accent)' : '#fff'}; box-shadow: {draft.companyType === t.id ? 'inset 0 0 0 2px #fff' : 'none'};"></span>
-                <span style="min-width: 0;">
-                  <span style="display: block; font-size: 13px; font-weight: 500;">{t.id}</span>
-                  <span style="display: block; font-size: 12px; color: var(--muted); margin-top: 2px; line-height: 1.45;">{t.note}</span>
-                </span>
-              </button>
-            {/each}
-          </div>
-        </div>
-
-        <div style="margin-top: 20px;">
-          <div style="{label} margin-bottom: 9px;">Company size</div>
-          <div style="display: flex; gap: 6px; flex-wrap: wrap;">
-            {#each SIZES as z (z)}
-              <button
-                type="button"
-                on:click={() => (draft = { ...draft, size: z })}
-                style="padding: 7px 13px; border: 1px solid {draft.size === z ? 'var(--ink)' : 'var(--line)'}; background: {draft.size === z ? 'var(--ink)' : '#fff'}; color: {draft.size === z ? '#fff' : 'var(--muted)'}; border-radius: 3px; font-size: 12.5px; cursor: pointer;"
-              >{z}</button>
-            {/each}
-          </div>
-        </div>
-
-        {#if submitted && !stepOneValid}
+        {#if submitted && !stepValid}
           <div style="margin-top: 20px; padding: 10px 12px; border: 1px solid #e6c4c4; background: #fdf5f5; border-radius: 3px; font-size: 12.5px; color: #932f2f; max-width: 460px;">
             {errorCount(errors) === 1 ? 'One field needs attention' : errorCount(errors) + ' fields need attention'} before you can continue.
           </div>
@@ -253,6 +262,91 @@
           Already have a workspace?
           <button type="button" class="link-btn" on:click={() => dispatch('signin')} style="background: none; border: none; padding: 0; font: inherit; color: var(--accent); cursor: pointer;">Sign in</button>
         </p>
+      </div>
+    {:else if step === 2}
+      <div style="max-width: 520px;">
+        <h1 style="font-size: 28px; line-height: 1.18; font-weight: 600; letter-spacing: -0.02em; margin: 0 0 8px;">About your company</h1>
+        <p style="font-size: 14px; line-height: 1.6; color: var(--muted); margin: 0 0 28px;">
+          A few quick questions so we can set up your workspace.
+        </p>
+
+        <div style="display: flex; flex-direction: column; gap: 22px;">
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px;">
+            <label style="display: flex; flex-direction: column; gap: 7px; min-width: 0;">
+              <span style={label}>Your role</span>
+              <select
+                class="field"
+                value={draft.role}
+                aria-invalid={!!shown.role}
+                on:change={set('role')}
+                on:blur={touch('role')}
+                style="{field} height: 38px; padding: 0 9px; cursor: pointer;{shown.role ? ' border-color: #c86b6b; background: #fdf7f7;' : ''}{draft.role ? '' : ' color: var(--faint);'}"
+              >
+                <option value="" disabled>Select…</option>
+                {#each SIGNUP_ROLES as r (r)}<option value={r}>{r}</option>{/each}
+              </select>
+              {#if shown.role}<span style="{mono} font-size: 11px; color: #932f2f; letter-spacing: 0.02em;">{shown.role}</span>{/if}
+            </label>
+            <Field
+              label="Country"
+              placeholder="India"
+              value={draft.country}
+              height="38px"
+              error={shown.country ?? null}
+              on:input={set('country')}
+              on:blur={touch('country')}
+            />
+          </div>
+
+          <fieldset style="border: none; padding: 0; margin: 0;">
+            <legend style="{label} margin-bottom: 9px; padding: 0;">Company type</legend>
+            <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+              {#each COMPANY_TYPES as t (t)}
+                <button type="button" aria-pressed={draft.companyType === t} on:click={pick('companyType', t)} style={chip(draft.companyType === t)}>{t}</button>
+              {/each}
+            </div>
+          </fieldset>
+
+          <fieldset style="border: none; padding: 0; margin: 0;">
+            <legend style="{label} margin-bottom: 9px; padding: 0;">Employees</legend>
+            <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+              {#each COMPANY_SIZES as z (z)}
+                <button type="button" aria-pressed={draft.size === z} on:click={pick('size', z)} style={chip(draft.size === z)}>{z}</button>
+              {/each}
+            </div>
+          </fieldset>
+
+          <fieldset style="border: none; padding: 0; margin: 0;">
+            <legend style="{label} margin-bottom: 9px; padding: 0;">Sectors you bid into</legend>
+            <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+              {#each BID_SECTORS as s (s)}
+                <button type="button" aria-pressed={draft.sectors.includes(s)} on:click={toggle('sectors', s)} style={chip(draft.sectors.includes(s))}>{s}</button>
+              {/each}
+            </div>
+            {#if shown.sectors}<div style={errText}>{shown.sectors}</div>{/if}
+          </fieldset>
+
+          <fieldset style="border: none; padding: 0; margin: 0;">
+            <legend style="{label} margin-bottom: 9px; padding: 0;">Bids per year</legend>
+            <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+              {#each BID_VOLUMES as v (v)}
+                <button type="button" aria-pressed={draft.bidVolume === v} on:click={pick('bidVolume', v)} style={chip(draft.bidVolume === v)}>{v}</button>
+              {/each}
+            </div>
+            {#if shown.bidVolume}<div style={errText}>{shown.bidVolume}</div>{/if}
+          </fieldset>
+        </div>
+
+        {#if submitted && !stepValid}
+          <div style="margin-top: 20px; padding: 10px 12px; border: 1px solid #e6c4c4; background: #fdf5f5; border-radius: 3px; font-size: 12.5px; color: #932f2f; max-width: 460px;">
+            {errorCount(errors) === 1 ? 'One question needs an answer' : errorCount(errors) + ' questions need an answer'} before you can continue.
+          </div>
+        {/if}
+
+        <div style="display: flex; gap: 8px; margin-top: 26px;">
+          <button type="button" class="btn-ghost" on:click={back} style="{btnGhost} height: 44px; padding: 0 18px; font-size: 14px;">Back</button>
+          <button type="button" class="btn-dark" on:click={next} style="{btnDark} height: 44px; padding: 0 22px; font-size: 14px;">Continue</button>
+        </div>
       </div>
     {:else}
       <div style="max-width: 620px;">
@@ -377,7 +471,7 @@
         {/if}
 
         <div style="display: flex; gap: 8px; margin-top: 26px;">
-          <button type="button" class="btn-ghost" on:click={() => (step = 1)} style="{btnGhost} height: 44px; padding: 0 18px; font-size: 14px;">Back</button>
+          <button type="button" class="btn-ghost" on:click={back} style="{btnGhost} height: 44px; padding: 0 18px; font-size: 14px;">Back</button>
           <button type="button" class="btn-dark" disabled={busy} on:click={create} style="{btnDark} height: 44px; padding: 0 20px; font-size: 14px;{busy ? ' opacity: 0.6; cursor: wait;' : ''}">
             {busy ? 'Creating…' : billing === 'paid' ? 'Continue to payment' : 'Start free trial'}
           </button>

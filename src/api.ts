@@ -6,7 +6,7 @@
  * memory only; the refresh token is an httpOnly cookie the browser handles, which is why
  * every call sets `credentials: 'include'`.
  */
-import type { Bid, BidStage, BillingCycle, CompanyType, Plan, PlanId, Role, Status, User } from './types';
+import type { Bid, BidStage, BillingCycle, CompanyProfile, CompanyType, Plan, PlanId, Role, Status, User } from './types';
 
 const BASE = (import.meta.env.VITE_API_URL as string | undefined) ?? 'http://localhost:4000/api';
 
@@ -165,6 +165,8 @@ export interface SignupPayload {
   password: string;
   size?: string;
   companyType?: CompanyType;
+  /** Answers from the signup "About your company" step. */
+  company?: CompanyProfile;
   plan: PlanId;
   cycle: BillingCycle;
   seats: number;
