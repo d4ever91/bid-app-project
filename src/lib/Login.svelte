@@ -117,7 +117,7 @@
       {/if}
 
       <button class="btn-dark" type="submit" disabled={busy} style="{btnDark} height: 44px; font-size: 14px; margin-top: 10px;{busy ? ' opacity: 0.6; cursor: wait;' : ''}">
-        {busy ? 'Signing in…' : 'Continue'}
+        {busy ? 'Logging in…' : 'Login'}
       </button>
       <button class="btn-ghost" type="button" on:click={ssoSignIn} style="{btnGhost} height: 44px; font-size: 14px; font-weight: 500; display: flex; align-items: center; justify-content: center; gap: 8px;">
         <span style="width: 12px; height: 12px; border: 2px solid var(--accent); border-radius: 2px; display: inline-block;"></span>

@@ -2,13 +2,11 @@ import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import crypto from 'node:crypto';
 import { config } from '../config.js';
-import { db, newId, now, save } from '../db.js';
+import { db, isDuplicate, newId, now } from '../db.js';
+import { HttpError, assertValid, badRequest, clean, ok, rules, unauthorized, validate } from '../http.js';
 import {
-  HttpError, assertValid, badRequest, clean, ok, rules, unauthorized, validate
-} from '../http.js';
-import {
-  REFRESH_COOKIE, clearRefreshCookie, consumeRefreshToken, requireAuth, revokeUserSessions, sha256, signAccessToken,
-  issueRefreshToken, startSession
+  REFRESH_COOKIE, clearRefreshCookie, consumeRefreshToken, issueRefreshToken, requireAuth, revokeUserSessions, roleRank,
+  sha256, signAccessToken, startSession
 } from '../auth.js';
 import { CYCLES, PLAN_IDS, TRIAL_DAYS, planById, seatCeiling } from '../plans.js';
 import { sessionUser, sessionWorkspace } from '../serialize.js';
@@ -37,7 +35,8 @@ function limit(maxPerWindow, windowMs) {
 }
 const credentialLimit = limit(20, 15 * 60 * 1000);
 
-const emailTaken = (email) => db.users.some((u) => u.email === email && !u.deletedAt);
+/** Live (non-archived) account using this email, in any workspace. */
+export const findLiveUserByEmail = (email) => db.users.findOne({ email, deletedAt: null });
 
 /* ---------------- signup ---------------- */
 
@@ -82,20 +81,21 @@ router.post('/signup', credentialLimit, async (req, res) => {
 
   const email = clean(body.email).toLowerCase();
   const domain = clean(body.domain).toLowerCase();
-  if (!fields.email && emailTaken(email)) fields.email = 'An account with this email already exists — sign in instead';
-  if (!fields.domain && db.workspaces.some((w) => w.domain === domain)) {
-    fields.domain = 'A workspace for this domain already exists — ask its owner for an invite';
+  if (!fields.email && (await findLiveUserByEmail(email))) {
+    fields.email = 'An account with this email already exists — sign in instead';
   }
+  const domainTaken = 'A workspace for this domain already exists — ask its owner for an invite';
+  if (!fields.domain && (await db.workspaces.findOne({ domain }))) fields.domain = domainTaken;
   assertValid(fields, 'Some details need fixing before we can create your workspace');
 
   const createdAt = now();
   const cycle = body.cycle ?? 'annual';
   const seats = Number(body.seats ?? 10);
-  const trialEndsAt = new Date(Date.now() + TRIAL_DAYS * 864e5).toISOString();
+  const trialEndsAt = new Date(Date.now() + TRIAL_DAYS * 864e5);
   const paidRequested = body.billing === 'paid';
 
   const workspace = {
-    id: newId(),
+    _id: newId(),
     name: clean(body.workspace),
     domain,
     companyType: company?.companyType ?? body.companyType ?? 'Other',
@@ -122,12 +122,13 @@ router.post('/signup', credentialLimit, async (req, res) => {
   };
 
   const user = {
-    id: newId(),
-    workspaceId: workspace.id,
+    _id: newId(),
+    workspaceId: workspace._id,
     name: clean(body.name),
     email,
     passwordHash: await bcrypt.hash(String(body.password), 10),
     role: 'Owner',
+    roleRank: roleRank('Owner'),
     team: 'Leadership',
     status: 'Active',
     location: company?.country ? clean(company.country) : null,
@@ -139,11 +140,16 @@ router.post('/signup', credentialLimit, async (req, res) => {
     deletedAt: null
   };
 
-  db.workspaces.push(workspace);
-  db.users.push(user);
-  save();
+  try {
+    await db.workspaces.insertOne(workspace);
+  } catch (err) {
+    // Two signups for the same domain at once — the unique index decides.
+    if (isDuplicate(err)) throw badRequest('Some details need fixing before we can create your workspace', { domain: domainTaken });
+    throw err;
+  }
+  await db.users.insertOne(user);
 
-  const accessToken = startSession(res, user);
+  const accessToken = await startSession(res, user);
   ok(
     res,
     { accessToken, user: sessionUser(user), workspace: sessionWorkspace(workspace), checkoutUrl: null },
@@ -166,7 +172,7 @@ router.post('/login', credentialLimit, async (req, res) => {
   );
 
   const email = clean(body.email).toLowerCase();
-  const user = db.users.find((u) => u.email === email && !u.deletedAt);
+  const user = await findLiveUserByEmail(email);
   const valid = user?.passwordHash ? await bcrypt.compare(String(body.password), user.passwordHash) : false;
 
   if (!valid) {
@@ -179,27 +185,25 @@ router.post('/login', credentialLimit, async (req, res) => {
     throw new HttpError(403, 'ACCOUNT_SUSPENDED', 'This account is suspended. Contact your workspace admin.');
   }
 
-  user.lastSeenAt = now();
-  save();
-
-  const accessToken = startSession(res, user);
+  await db.users.updateOne({ _id: user._id }, { $set: { lastSeenAt: now() } });
+  const accessToken = await startSession(res, user);
   ok(res, { accessToken, user: sessionUser(user) }, 'Signed in');
 });
 
-router.post('/refresh', (req, res) => {
-  const row = consumeRefreshToken(req.cookies?.[REFRESH_COOKIE]);
-  const user = row && db.users.find((u) => u.id === row.userId && !u.deletedAt && u.status !== 'Suspended');
+router.post('/refresh', async (req, res) => {
+  const row = await consumeRefreshToken(req.cookies?.[REFRESH_COOKIE]);
+  const user = row && (await db.users.findOne({ _id: row.userId, deletedAt: null, status: { $ne: 'Suspended' } }));
   if (!user) {
     clearRefreshCookie(res);
     throw unauthorized('No active session');
   }
-  user.lastSeenAt = now();
-  issueRefreshToken(res, user);
+  await db.users.updateOne({ _id: user._id }, { $set: { lastSeenAt: now() } });
+  await issueRefreshToken(res, user);
   ok(res, { accessToken: signAccessToken(user) });
 });
 
-router.post('/logout', (req, res) => {
-  consumeRefreshToken(req.cookies?.[REFRESH_COOKIE]);
+router.post('/logout', async (req, res) => {
+  await consumeRefreshToken(req.cookies?.[REFRESH_COOKIE]);
   clearRefreshCookie(res);
   ok(res, null, 'Signed out');
 });
@@ -220,24 +224,28 @@ router.post('/accept-invite', credentialLimit, async (req, res) => {
     })
   );
 
-  const invite = db.invites.find((i) => i.tokenHash === sha256(String(body.token)) && !i.revokedAt);
+  const invite = await db.invites.findOne({ tokenHash: sha256(String(body.token)), revokedAt: null });
   if (!invite || invite.acceptedAt) throw badRequest('This invite link is invalid or has already been used');
-  if (Date.parse(invite.expiresAt) < Date.now()) throw badRequest('This invite has expired — ask an admin to resend it');
+  if (invite.expiresAt < new Date()) throw badRequest('This invite has expired — ask an admin to resend it');
 
-  const user = db.users.find((u) => u.id === invite.userId && !u.deletedAt);
+  const user = await db.users.findOne({ _id: invite.userId, deletedAt: null });
   if (!user) throw badRequest('This invite is no longer valid');
 
   const at = now();
-  user.passwordHash = await bcrypt.hash(String(body.password), 10);
-  user.passwordChangedAt = at;
-  user.status = 'Active';
-  user.lastSeenAt = at;
-  if (clean(body.name)) user.name = clean(body.name);
-  invite.acceptedAt = at;
-  save();
+  const set = {
+    passwordHash: await bcrypt.hash(String(body.password), 10),
+    passwordChangedAt: at,
+    status: 'Active',
+    lastSeenAt: at,
+    ...(clean(body.name) ? { name: clean(body.name) } : {})
+  };
+  await db.users.updateOne({ _id: user._id }, { $set: set });
+  await db.invites.updateOne({ _id: invite._id }, { $set: { acceptedAt: at } });
+  const updated = { ...user, ...set };
 
-  const accessToken = startSession(res, user);
-  ok(res, { accessToken, user: sessionUser(user) }, 'Welcome to ' + (db.workspaces.find((w) => w.id === user.workspaceId)?.name ?? 'the workspace'));
+  const workspace = await db.workspaces.findOne({ _id: user.workspaceId });
+  const accessToken = await startSession(res, updated);
+  ok(res, { accessToken, user: sessionUser(updated) }, 'Welcome to ' + (workspace?.name ?? 'the workspace'));
 });
 
 router.post('/reset-password', credentialLimit, async (req, res) => {
@@ -249,19 +257,26 @@ router.post('/reset-password', credentialLimit, async (req, res) => {
     })
   );
 
-  const row = db.resetTokens.find((t) => t.hash === sha256(String(body.token)));
-  if (!row || row.usedAt || Date.parse(row.expiresAt) < Date.now()) {
-    throw badRequest('This reset link is invalid or has expired');
-  }
-  const user = db.users.find((u) => u.id === row.userId && !u.deletedAt);
+  // Single use: claim the token atomically before changing anything.
+  const row = await db.resetTokens.findOneAndUpdate(
+    { hash: sha256(String(body.token)), usedAt: null, expiresAt: { $gt: new Date() } },
+    { $set: { usedAt: now() } }
+  );
+  if (!row) throw badRequest('This reset link is invalid or has expired');
+  const user = await db.users.findOne({ _id: row.userId, deletedAt: null });
   if (!user) throw badRequest('This reset link is no longer valid');
 
-  user.passwordHash = await bcrypt.hash(String(body.password), 10);
-  user.passwordChangedAt = now();
-  if (user.status === 'Invited') user.status = 'Active';
-  row.usedAt = now();
-  revokeUserSessions(user.id);
-  save();
+  await db.users.updateOne(
+    { _id: user._id },
+    {
+      $set: {
+        passwordHash: await bcrypt.hash(String(body.password), 10),
+        passwordChangedAt: now(),
+        ...(user.status === 'Invited' ? { status: 'Active' } : {})
+      }
+    }
+  );
+  await revokeUserSessions(user._id);
   ok(res, null, 'Password updated — sign in with your new password');
 });
 
@@ -269,20 +284,18 @@ export default router;
 
 /* ---------------- helpers shared with the users/invites routes ---------------- */
 
-export function createResetLink(user) {
+export async function createResetLink(user) {
   const token = crypto.randomBytes(32).toString('base64url');
-  db.resetTokens.push({
-    id: newId(),
-    userId: user.id,
+  await db.resetTokens.insertOne({
+    _id: newId(),
+    userId: user._id,
     hash: sha256(token),
     createdAt: now(),
-    expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    expiresAt: new Date(Date.now() + 60 * 60 * 1000),
     usedAt: null
   });
-  save();
   const link = `${config.appUrl}/?reset=${token}`;
   // No mail provider is configured — log the link so it can be used locally.
   console.log(`[mail] Password reset for ${user.email}: ${link}`);
   return { token, link };
 }
-

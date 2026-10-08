@@ -34,12 +34,16 @@ export const config = {
   /** Where the frontend lives — used to build invite, reset and checkout return links. */
   appUrl: (process.env.APP_URL ?? 'http://localhost:5173').replace(/\/$/, ''),
 
-  /** Empty means: generate one and keep it in the data file (fine for local dev only). */
+  /** Empty means: generate one and keep it in the database (fine for local dev only). */
   jwtSecret: process.env.JWT_SECRET ?? '',
   accessTtlSeconds: Number(process.env.ACCESS_TTL_SECONDS ?? 15 * 60),
   refreshTtlDays: Number(process.env.REFRESH_TTL_DAYS ?? 30),
 
-  dataFile: path.resolve(SERVER_ROOT, process.env.DATA_FILE ?? 'data/db.json'),
+  /** MongoDB connection string. The database name comes from the URI path, or MONGODB_DB. */
+  mongoUri: process.env.MONGODB_URI ?? 'mongodb://127.0.0.1:27017/ordinal_bids',
+  mongoDb: process.env.MONGODB_DB ?? '',
+  /** Seed demo data when the database has no workspaces yet (never in production). */
+  seedOnStart: (process.env.SEED_ON_START ?? 'true') !== 'false',
 
   anthropicApiKey: process.env.ANTHROPIC_API_KEY ?? '',
   anthropicModel: process.env.ANTHROPIC_MODEL ?? 'claude-sonnet-5-5'

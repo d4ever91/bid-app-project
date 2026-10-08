@@ -1,13 +1,13 @@
 import { Router } from 'express';
 import crypto from 'node:crypto';
 import { config } from '../config.js';
-import { db, newId, now, save } from '../db.js';
+import { db, escapeRegex, newId, now, toId } from '../db.js';
 import {
-  HttpError, assertValid, badRequest, clean, conflict, forbidden, notFound, ok, paginate, paging, rules, validate
+  HttpError, assertValid, badRequest, clean, conflict, forbidden, notFound, ok, paging, rules, validate
 } from '../http.js';
-import { ROLES, allow, requireAuth, revokeUserSessions, sha256 } from '../auth.js';
+import { ROLES, allow, requireAuth, revokeUserSessions, roleRank, sha256 } from '../auth.js';
 import { publicInvite, publicUser } from '../serialize.js';
-import { createResetLink } from './auth.js';
+import { createResetLink, findLiveUserByEmail } from './auth.js';
 
 const STATUSES = ['Active', 'Invited', 'Suspended'];
 const INVITE_HOURS = 72;
@@ -18,21 +18,27 @@ router.use(requireAuth);
 
 /* ---------------- helpers ---------------- */
 
-const inWorkspace = (req) => db.users.filter((u) => u.workspaceId === req.workspace.id);
-
-function findUser(req, id, { includeArchived = true } = {}) {
-  const user = inWorkspace(req).find((u) => u.id === id);
+async function findUser(req, id, { includeArchived = true } = {}) {
+  const _id = toId(id);
+  const user = _id && (await db.users.findOne({ _id, workspaceId: req.workspace._id }));
   if (!user || (!includeArchived && user.deletedAt)) throw notFound('User not found');
   return user;
 }
 
-const activeOwners = (req) => inWorkspace(req).filter((u) => u.role === 'Owner' && !u.deletedAt && u.status !== 'Suspended');
+const otherActiveOwners = (req, exceptId) =>
+  db.users.countDocuments({
+    workspaceId: req.workspace._id,
+    _id: { $ne: exceptId },
+    role: 'Owner',
+    deletedAt: null,
+    status: { $ne: 'Suspended' }
+  });
 
 /** Seats count every non-archived account, invited ones included. */
-export const seatsUsed = (workspaceId) => db.users.filter((u) => u.workspaceId === workspaceId && !u.deletedAt).length;
+export const seatsUsed = (workspaceId) => db.users.countDocuments({ workspaceId, deletedAt: null });
 
-function assertSeatAvailable(req) {
-  if (seatsUsed(req.workspace.id) >= req.workspace.seatsLicensed) {
+async function assertSeatAvailable(req) {
+  if ((await seatsUsed(req.workspace._id)) >= req.workspace.seatsLicensed) {
     throw new HttpError(
       409,
       'SEAT_LIMIT',
@@ -48,82 +54,119 @@ function assertCanAssignRole(req, target, nextRole) {
   }
 }
 
-function assertNotLastOwner(req, target, message) {
-  if (target.role === 'Owner' && activeOwners(req).filter((u) => u.id !== target.id).length === 0) {
+async function assertNotLastOwner(req, target, message) {
+  if (target.role === 'Owner' && (await otherActiveOwners(req, target._id)) === 0) {
     throw conflict(message ?? 'The workspace needs at least one active Owner');
   }
 }
 
-export function createInviteFor(req, user, expiresInHours = INVITE_HOURS) {
+async function assertEmailFree(email, exceptId) {
+  const existing = await findLiveUserByEmail(email);
+  if (existing && String(existing._id) !== String(exceptId)) {
+    throw conflict('That email is already in use', { email: 'Another account already uses this email' });
+  }
+}
+
+export async function createInviteFor(req, user, expiresInHours = INVITE_HOURS) {
   const token = crypto.randomBytes(32).toString('base64url');
   const invite = {
-    id: newId(),
-    workspaceId: req.workspace.id,
-    userId: user.id,
+    _id: newId(),
+    workspaceId: req.workspace._id,
+    userId: user._id,
     email: user.email,
     name: user.name,
     role: user.role,
     team: user.team,
     tokenHash: sha256(token),
-    invitedBy: req.user.id,
-    expiresAt: new Date(Date.now() + expiresInHours * 3600e3).toISOString(),
+    invitedBy: req.user._id,
+    expiresAt: new Date(Date.now() + expiresInHours * 3600e3),
     acceptedAt: null,
     revokedAt: null,
     createdAt: now()
   };
-  db.invites.push(invite);
+  await db.invites.insertOne(invite);
   const link = `${config.appUrl}/?invite=${token}`;
   console.log(`[mail] Invite for ${user.email} (${req.workspace.name}): ${link}`);
   return { invite, token, link };
 }
 
-const sorters = {
-  name: (a, b) => a.name.localeCompare(b.name),
-  role: (a, b) => ROLES.indexOf(a.role) - ROLES.indexOf(b.role) || a.name.localeCompare(b.name),
-  team: (a, b) => (a.team ?? '').localeCompare(b.team ?? '') || a.name.localeCompare(b.name),
+function newInvitedUser(req, body) {
+  return {
+    _id: newId(),
+    workspaceId: req.workspace._id,
+    name: clean(body.name),
+    email: clean(body.email).toLowerCase(),
+    passwordHash: null,
+    role: body.role,
+    roleRank: roleRank(body.role),
+    team: clean(body.team),
+    status: 'Invited',
+    manager: clean(body.manager) || null,
+    location: clean(body.location) || null,
+    requireMfa: body.requireMfa !== false,
+    mfaEnrolledAt: null,
+    passwordChangedAt: null,
+    lastSeenAt: null,
+    createdAt: now(),
+    deletedAt: null
+  };
+}
+
+/** Applies $set and returns the updated document. */
+const setUser = (user, set) =>
+  db.users.findOneAndUpdate({ _id: user._id }, { $set: { ...set, updatedAt: now() } }, { returnDocument: 'after' });
+
+const SORTS = {
+  name: { name: 1, _id: 1 },
+  role: { roleRank: 1, name: 1, _id: 1 },
+  team: { team: 1, name: 1, _id: 1 },
   // Oldest password first — the audit view wants the stalest credentials on top.
-  passwordAge: (a, b) => (Date.parse(a.passwordChangedAt ?? 0) || 0) - (Date.parse(b.passwordChangedAt ?? 0) || 0)
+  passwordAge: { passwordChangedAt: 1, name: 1, _id: 1 }
 };
 
 /* ---------------- reads ---------------- */
 
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
   const { q, role, team, status, mfa, archived = 'exclude', sort = 'name' } = req.query;
-  const needle = clean(q).toLowerCase();
+  const filter = { workspaceId: req.workspace._id };
 
-  let rows = inWorkspace(req).filter((u) => {
-    if (archived === 'exclude' && u.deletedAt) return false;
-    if (archived === 'only' && !u.deletedAt) return false;
-    if (needle && ![u.name, u.email, u.team, u.location].some((v) => (v ?? '').toLowerCase().includes(needle))) return false;
-    if (role && u.role !== role) return false;
-    if (team && u.team !== team) return false;
-    if (status && u.status !== status) return false;
-    if (mfa === 'enrolled' && !u.mfaEnrolledAt) return false;
-    if (mfa === 'pending' && (u.mfaEnrolledAt || u.status !== 'Invited')) return false;
-    if (mfa === 'missing' && (u.mfaEnrolledAt || u.status === 'Invited')) return false;
-    return true;
-  });
+  if (archived === 'exclude') filter.deletedAt = null;
+  if (archived === 'only') filter.deletedAt = { $ne: null };
+  const needle = clean(q);
+  if (needle) {
+    const re = { $regex: escapeRegex(needle), $options: 'i' };
+    filter.$or = [{ name: re }, { email: re }, { team: re }, { location: re }];
+  }
+  if (role) filter.role = String(role);
+  if (team) filter.team = String(team);
+  if (status) filter.status = String(status);
+  if (mfa === 'enrolled') filter.mfaEnrolledAt = { $ne: null };
+  if (mfa === 'pending') Object.assign(filter, { mfaEnrolledAt: null, status: 'Invited' });
+  if (mfa === 'missing') Object.assign(filter, { mfaEnrolledAt: null, status: status && status !== 'Invited' ? String(status) : { $ne: 'Invited' } });
 
-  rows = rows.sort(sorters[sort] ?? sorters.name);
-  const { items, meta } = paginate(rows, paging(req.query));
-  ok(res, items.map(publicUser), null, { meta });
+  const { page, limit } = paging(req.query);
+  const [total, rows] = await Promise.all([
+    db.users.countDocuments(filter),
+    db.users.find(filter).sort(SORTS[sort] ?? SORTS.name).skip((page - 1) * limit).limit(limit).toArray()
+  ]);
+  ok(res, rows.map(publicUser), null, { meta: { page, limit, total, pages: Math.max(1, Math.ceil(total / limit)) } });
 });
 
-router.get('/facets', (req, res) => {
-  const live = inWorkspace(req).filter((u) => !u.deletedAt);
-  const count = (key, values) => values.map((value) => ({ value, count: live.filter((u) => u[key] === value).length }));
-  ok(res, {
-    teams: [...new Set(live.map((u) => u.team).filter(Boolean))].sort(),
-    roles: count('role', ROLES),
-    statuses: count('status', STATUSES),
-    total: live.length,
-    mfaMissing: live.filter((u) => !u.mfaEnrolledAt && u.status !== 'Invited').length,
-    archived: inWorkspace(req).filter((u) => u.deletedAt).length
-  });
+router.get('/facets', async (req, res) => {
+  const live = { workspaceId: req.workspace._id, deletedAt: null };
+  const [teams, roles, statuses, total, mfaMissing, archived] = await Promise.all([
+    db.users.distinct('team', live),
+    Promise.all(ROLES.map(async (value) => ({ value, count: await db.users.countDocuments({ ...live, role: value }) }))),
+    Promise.all(STATUSES.map(async (value) => ({ value, count: await db.users.countDocuments({ ...live, status: value }) }))),
+    db.users.countDocuments(live),
+    db.users.countDocuments({ ...live, mfaEnrolledAt: null, status: { $ne: 'Invited' } }),
+    db.users.countDocuments({ workspaceId: req.workspace._id, deletedAt: { $ne: null } })
+  ]);
+  ok(res, { teams: teams.filter(Boolean).sort(), roles, statuses, total, mfaMissing, archived });
 });
 
-router.get('/:id', (req, res) => {
-  ok(res, publicUser(findUser(req, req.params.id)));
+router.get('/:id', async (req, res) => {
+  ok(res, publicUser(await findUser(req, req.params.id)));
 });
 
 /* ---------------- writes ---------------- */
@@ -137,43 +180,17 @@ const userSchema = (partial) => ({
   location: [rules.maxLen(80)]
 });
 
-function assertEmailFree(email, exceptId) {
-  if (db.users.some((u) => u.email === email && u.id !== exceptId && !u.deletedAt)) {
-    throw conflict('That email is already in use', { email: 'Another account already uses this email' });
-  }
-}
-
-router.post('/', manage, (req, res) => {
+router.post('/', manage, async (req, res) => {
   const body = req.body ?? {};
   assertValid(validate(body, userSchema(false)));
-  const email = clean(body.email).toLowerCase();
-  assertEmailFree(email);
+  const user = newInvitedUser(req, body);
+  await assertEmailFree(user.email);
   assertCanAssignRole(req, null, body.role);
-  assertSeatAvailable(req);
+  await assertSeatAvailable(req);
 
-  const user = {
-    id: newId(),
-    workspaceId: req.workspace.id,
-    name: clean(body.name),
-    email,
-    passwordHash: null,
-    role: body.role,
-    team: clean(body.team),
-    status: 'Invited',
-    manager: clean(body.manager) || null,
-    location: clean(body.location) || null,
-    requireMfa: body.requireMfa !== false,
-    mfaEnrolledAt: null,
-    passwordChangedAt: null,
-    lastSeenAt: null,
-    createdAt: now(),
-    deletedAt: null
-  };
-  db.users.push(user);
-
+  await db.users.insertOne(user);
   // Every new account needs a way in; "sendInvite: false" just means the admin shares the link.
-  const { token } = createInviteFor(req, user);
-  save();
+  const { token } = await createInviteFor(req, user);
 
   ok(
     res,
@@ -183,9 +200,9 @@ router.post('/', manage, (req, res) => {
   );
 });
 
-router.patch('/:id', (req, res) => {
-  const target = findUser(req, req.params.id, { includeArchived: false });
-  const self = target.id === req.user.id;
+router.patch('/:id', async (req, res) => {
+  const target = await findUser(req, req.params.id, { includeArchived: false });
+  const self = String(target._id) === String(req.user._id);
   if (!self && !['Owner', 'Admin'].includes(req.user.role)) throw forbidden('You can only edit your own profile');
 
   const body = req.body ?? {};
@@ -195,96 +212,83 @@ router.patch('/:id', (req, res) => {
 
   if (patch.email !== undefined) {
     patch.email = clean(patch.email).toLowerCase();
-    assertEmailFree(patch.email, target.id);
+    await assertEmailFree(patch.email, target._id);
   }
   for (const key of ['name', 'team', 'manager', 'location']) {
     if (patch[key] !== undefined) patch[key] = clean(patch[key]) || (key === 'name' ? target.name : null);
   }
-  Object.assign(target, patch, { updatedAt: now() });
-  save();
-  ok(res, publicUser(target), 'Profile updated');
+  ok(res, publicUser(await setUser(target, patch)), 'Profile updated');
 });
 
-router.patch('/:id/role', manage, (req, res) => {
-  const target = findUser(req, req.params.id, { includeArchived: false });
+router.patch('/:id/role', manage, async (req, res) => {
+  const target = await findUser(req, req.params.id, { includeArchived: false });
   const role = req.body?.role;
   assertValid(validate({ role }, { role: [rules.required('Choose a role'), rules.oneOf(ROLES, 'Unknown role')] }));
-  if (target.id === req.user.id) throw forbidden("You can't change your own role — ask another Owner");
+  if (String(target._id) === String(req.user._id)) throw forbidden("You can't change your own role — ask another Owner");
   assertCanAssignRole(req, target, role);
-  if (role !== 'Owner') assertNotLastOwner(req, target);
+  if (role !== 'Owner') await assertNotLastOwner(req, target);
 
   const from = target.role;
-  target.role = role;
-  target.updatedAt = now();
-  save();
-  ok(res, publicUser(target), from === role ? `${target.name} is already ${role}` : `${target.name}: ${from} → ${role}`);
+  const updated = await setUser(target, { role, roleRank: roleRank(role) });
+  ok(res, publicUser(updated), from === role ? `${target.name} is already ${role}` : `${target.name}: ${from} → ${role}`);
 });
 
-router.patch('/:id/status', manage, (req, res) => {
-  const target = findUser(req, req.params.id, { includeArchived: false });
+router.patch('/:id/status', manage, async (req, res) => {
+  const target = await findUser(req, req.params.id, { includeArchived: false });
   const status = req.body?.status;
   assertValid(validate({ status }, { status: [rules.required('Choose a status'), rules.oneOf(STATUSES, 'Unknown status')] }));
-  if (target.id === req.user.id) throw forbidden("You can't change your own status");
+  if (String(target._id) === String(req.user._id)) throw forbidden("You can't change your own status");
   assertCanAssignRole(req, target, target.role);
   if (status === 'Suspended') {
-    assertNotLastOwner(req, target, "You can't suspend the last active Owner");
-    revokeUserSessions(target.id);
+    await assertNotLastOwner(req, target, "You can't suspend the last active Owner");
+    await revokeUserSessions(target._id);
   }
   if (status === 'Active' && !target.passwordHash) {
     throw badRequest(`${target.name} hasn't accepted their invite yet — resend it instead`);
   }
-
-  target.status = status;
-  target.updatedAt = now();
-  save();
-  ok(res, publicUser(target), `${target.name} is now ${status.toLowerCase()}`);
+  ok(res, publicUser(await setUser(target, { status })), `${target.name} is now ${status.toLowerCase()}`);
 });
 
-router.post('/:id/reset-password', manage, (req, res) => {
-  const target = findUser(req, req.params.id, { includeArchived: false });
+router.post('/:id/reset-password', manage, async (req, res) => {
+  const target = await findUser(req, req.params.id, { includeArchived: false });
   assertCanAssignRole(req, target, target.role);
-  createResetLink(target);
+  await createResetLink(target);
   ok(res, { sentTo: target.email }, `Password reset link sent to ${target.email}`);
 });
 
-router.delete('/:id', manage, (req, res) => {
-  const target = findUser(req, req.params.id, { includeArchived: false });
-  if (target.id === req.user.id) throw forbidden("You can't archive your own account");
+router.delete('/:id', manage, async (req, res) => {
+  const target = await findUser(req, req.params.id, { includeArchived: false });
+  if (String(target._id) === String(req.user._id)) throw forbidden("You can't archive your own account");
   assertCanAssignRole(req, target, target.role);
-  assertNotLastOwner(req, target, "You can't archive the last active Owner");
+  await assertNotLastOwner(req, target, "You can't archive the last active Owner");
 
-  target.deletedAt = now();
-  revokeUserSessions(target.id);
-  for (const invite of db.invites) if (invite.userId === target.id && !invite.acceptedAt) invite.revokedAt = now();
-  save();
-  ok(res, publicUser(target), `${target.name} archived — restore them any time from Archived`);
+  const updated = await setUser(target, { deletedAt: now() });
+  await revokeUserSessions(target._id);
+  await db.invites.updateMany({ userId: target._id, acceptedAt: null, revokedAt: null }, { $set: { revokedAt: now() } });
+  ok(res, publicUser(updated), `${target.name} archived — restore them any time from Archived`);
 });
 
-router.post('/:id/restore', manage, (req, res) => {
-  const target = findUser(req, req.params.id);
+router.post('/:id/restore', manage, async (req, res) => {
+  const target = await findUser(req, req.params.id);
   if (!target.deletedAt) return ok(res, publicUser(target), `${target.name} isn't archived`);
-  assertEmailFree(target.email, target.id);
-  assertSeatAvailable(req);
-  target.deletedAt = null;
-  target.updatedAt = now();
-  save();
-  ok(res, publicUser(target), `${target.name} restored`);
+  await assertEmailFree(target.email, target._id);
+  await assertSeatAvailable(req);
+  ok(res, publicUser(await setUser(target, { deletedAt: null })), `${target.name} restored`);
 });
 
-router.delete('/:id/purge', allow('Owner'), (req, res) => {
-  const target = findUser(req, req.params.id);
+router.delete('/:id/purge', allow('Owner'), async (req, res) => {
+  const target = await findUser(req, req.params.id);
   if (!target.deletedAt) throw badRequest('Archive the account before deleting it permanently');
-  db.users = db.users.filter((u) => u.id !== target.id);
-  db.invites = db.invites.filter((i) => i.userId !== target.id);
-  db.resetTokens = db.resetTokens.filter((t) => t.userId !== target.id);
-  revokeUserSessions(target.id);
-  save();
+  await db.users.deleteOne({ _id: target._id });
+  await db.invites.deleteMany({ userId: target._id });
+  await db.resetTokens.deleteMany({ userId: target._id });
+  await revokeUserSessions(target._id);
   res.status(204).end();
 });
 
 /* ---------------- bulk ---------------- */
 
-router.post('/bulk', manage, (req, res) => {
+router.post('/bulk', manage, async (req, res) => {
   const { ids, action, role, status } = req.body ?? {};
   if (!Array.isArray(ids) || !ids.length) throw badRequest('Select at least one account', { ids: 'Select at least one account' });
   if (!['role', 'status', 'archive', 'reset-password'].includes(action)) throw badRequest('Unknown bulk action');
@@ -294,37 +298,39 @@ router.post('/bulk', manage, (req, res) => {
   const applied = [];
   const skipped = [];
 
-  for (const id of [...new Set(ids)].slice(0, 500)) {
-    const target = inWorkspace(req).find((u) => u.id === id && !u.deletedAt);
+  // Sequential on purpose: each change can affect the "last Owner" check for the next.
+  for (const id of [...new Set(ids.map(String))].slice(0, 500)) {
     try {
+      const _id = toId(id);
+      const target = _id && (await db.users.findOne({ _id, workspaceId: req.workspace._id, deletedAt: null }));
       if (!target) throw notFound('Not found');
-      if (target.id === req.user.id && action !== 'reset-password') throw forbidden("Can't apply to your own account");
+      const self = String(target._id) === String(req.user._id);
+      if (self && action !== 'reset-password') throw forbidden("Can't apply to your own account");
       assertCanAssignRole(req, target, action === 'role' ? role : target.role);
 
       if (action === 'role') {
-        if (role !== 'Owner') assertNotLastOwner(req, target);
-        target.role = role;
+        if (role !== 'Owner') await assertNotLastOwner(req, target);
+        await setUser(target, { role, roleRank: roleRank(role) });
       } else if (action === 'status') {
         if (status === 'Suspended') {
-          assertNotLastOwner(req, target);
-          revokeUserSessions(target.id);
+          await assertNotLastOwner(req, target);
+          await revokeUserSessions(target._id);
         }
         if (status === 'Active' && !target.passwordHash) throw badRequest('Invite not accepted yet');
-        target.status = status;
+        await setUser(target, { status });
       } else if (action === 'archive') {
-        assertNotLastOwner(req, target);
-        target.deletedAt = now();
-        revokeUserSessions(target.id);
+        await assertNotLastOwner(req, target);
+        await setUser(target, { deletedAt: now() });
+        await revokeUserSessions(target._id);
       } else {
-        createResetLink(target);
+        await createResetLink(target);
       }
-      target.updatedAt = now();
       applied.push(id);
     } catch (err) {
+      if (!(err instanceof HttpError)) throw err;
       skipped.push({ id, reason: err.message });
     }
   }
-  save();
 
   const verb = { role: `set to ${role}`, status: `set to ${status}`, archive: 'archived', 'reset-password': 'sent a reset link' }[action];
   const message =
@@ -339,28 +345,26 @@ export default router;
 export const invites = Router();
 invites.use(requireAuth);
 
-invites.get('/', (req, res) => {
+invites.get('/', async (req, res) => {
   const { state = 'pending', q, role } = req.query;
-  const needle = clean(q).toLowerCase();
-  const soon = Date.now() + 24 * 3600e3;
+  const at = new Date();
+  const filter = { workspaceId: req.workspace._id, revokedAt: null };
 
-  const rows = db.invites
-    .filter((i) => i.workspaceId === req.workspace.id && !i.revokedAt)
-    .filter((i) => {
-      const expired = Date.parse(i.expiresAt) < Date.now();
-      if (state === 'pending' && (i.acceptedAt || expired)) return false;
-      if (state === 'expiring' && (i.acceptedAt || expired || Date.parse(i.expiresAt) > soon)) return false;
-      if (state === 'accepted' && !i.acceptedAt) return false;
-      if (needle && ![i.name, i.email].some((v) => (v ?? '').toLowerCase().includes(needle))) return false;
-      if (role && i.role !== role) return false;
-      return true;
-    })
-    .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+  if (state === 'pending') Object.assign(filter, { acceptedAt: null, expiresAt: { $gte: at } });
+  if (state === 'expiring') Object.assign(filter, { acceptedAt: null, expiresAt: { $gte: at, $lte: new Date(at.getTime() + 24 * 3600e3) } });
+  if (state === 'accepted') filter.acceptedAt = { $ne: null };
+  const needle = clean(q);
+  if (needle) {
+    const re = { $regex: escapeRegex(needle), $options: 'i' };
+    filter.$or = [{ name: re }, { email: re }];
+  }
+  if (role) filter.role = String(role);
 
+  const rows = await db.invites.find(filter).sort({ createdAt: -1 }).limit(500).toArray();
   ok(res, rows.map(publicInvite));
 });
 
-invites.post('/', manage, (req, res) => {
+invites.post('/', manage, async (req, res) => {
   const body = req.body ?? {};
   assertValid(
     validate(body, {
@@ -368,61 +372,47 @@ invites.post('/', manage, (req, res) => {
       expiresInHours: [rules.int(1, 24 * 30, 'Expiry must be between 1 hour and 30 days')]
     })
   );
-  const email = clean(body.email).toLowerCase();
-  assertEmailFree(email);
+  const user = newInvitedUser(req, { ...body, manager: null, location: null });
+  await assertEmailFree(user.email);
   assertCanAssignRole(req, null, body.role);
-  assertSeatAvailable(req);
+  await assertSeatAvailable(req);
 
-  const user = {
-    id: newId(),
-    workspaceId: req.workspace.id,
-    name: clean(body.name),
-    email,
-    passwordHash: null,
-    role: body.role,
-    team: clean(body.team),
-    status: 'Invited',
-    manager: null,
-    location: null,
-    mfaEnrolledAt: null,
-    passwordChangedAt: null,
-    lastSeenAt: null,
-    createdAt: now(),
-    deletedAt: null
-  };
-  db.users.push(user);
-  const { invite, token } = createInviteFor(req, user, Number(body.expiresInHours) || INVITE_HOURS);
-  save();
+  await db.users.insertOne(user);
+  const { invite, token } = await createInviteFor(req, user, Number(body.expiresInHours) || INVITE_HOURS);
 
   ok(
     res,
     { invite: publicInvite(invite), inviteToken: config.env === 'production' ? undefined : token },
-    `Invite sent to ${email}`,
+    `Invite sent to ${user.email}`,
     { status: 201 }
   );
 });
 
-invites.post('/:id/resend', manage, (req, res) => {
-  const old = db.invites.find((i) => i.id === req.params.id && i.workspaceId === req.workspace.id && !i.revokedAt);
-  if (!old) throw notFound('Invite not found');
+async function findInvite(req) {
+  const _id = toId(req.params.id);
+  const invite = _id && (await db.invites.findOne({ _id, workspaceId: req.workspace._id, revokedAt: null }));
+  if (!invite) throw notFound('Invite not found');
+  return invite;
+}
+
+invites.post('/:id/resend', manage, async (req, res) => {
+  const old = await findInvite(req);
   if (old.acceptedAt) throw badRequest('This invite has already been accepted');
-  const user = db.users.find((u) => u.id === old.userId && !u.deletedAt);
+  const user = await db.users.findOne({ _id: old.userId, deletedAt: null });
   if (!user) throw notFound('The invited account no longer exists');
 
-  old.revokedAt = now();
-  createInviteFor(req, user);
-  save();
+  await db.invites.updateOne({ _id: old._id }, { $set: { revokedAt: now() } });
+  await createInviteFor(req, user);
   ok(res, { sentTo: user.email }, `Invite re-sent to ${user.email}`);
 });
 
-invites.delete('/:id', manage, (req, res) => {
-  const invite = db.invites.find((i) => i.id === req.params.id && i.workspaceId === req.workspace.id && !i.revokedAt);
-  if (!invite) throw notFound('Invite not found');
-  invite.revokedAt = now();
+invites.delete('/:id', manage, async (req, res) => {
+  const invite = await findInvite(req);
+  await db.invites.updateOne({ _id: invite._id }, { $set: { revokedAt: now() } });
 
   // An invite that was never accepted shouldn't leave a placeholder account behind.
-  const user = db.users.find((u) => u.id === invite.userId);
-  if (user && !invite.acceptedAt && !user.passwordHash) user.deletedAt = now();
-  save();
+  if (!invite.acceptedAt) {
+    await db.users.updateOne({ _id: invite.userId, passwordHash: null, deletedAt: null }, { $set: { deletedAt: now() } });
+  }
   res.status(204).end();
 });

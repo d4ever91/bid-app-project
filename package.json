@@ -12,7 +12,9 @@
     "api": "npm --prefix server run dev",
     "api:install": "npm --prefix server install",
     "api:seed": "npm --prefix server run seed",
-    "api:test": "npm --prefix server test"
+    "api:test": "npm --prefix server test",
+    "db:up": "docker compose up -d mongo",
+    "db:down": "docker compose stop mongo"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^3.1.1",

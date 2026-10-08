@@ -2,12 +2,20 @@ import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import { config } from './config.js';
+import { isConnected } from './db.js';
 import { HttpError, ok, sendError } from './http.js';
 import authRoutes from './routes/auth.js';
 import userRoutes, { invites as inviteRoutes } from './routes/users.js';
 import bidRoutes from './routes/bids.js';
 import subscriptionRoutes from './routes/subscription.js';
 import assistantRoutes from './routes/assistant.js';
+
+const DB_DOWN_MESSAGE =
+  "The API can't reach MongoDB. Start MongoDB (e.g. `docker compose up -d mongo`) or check MONGODB_URI in server/.env.";
+
+const isMongoConnectivityError = (err) =>
+  err?.code === 'DB_NOT_CONNECTED' ||
+  /^Mongo(ServerSelection|Network|NotConnected|TopologyClosed)/.test(err?.name ?? '');
 
 export function createApp() {
   const app = express();
@@ -35,7 +43,15 @@ export function createApp() {
   app.use(cookieParser());
 
   const api = express.Router();
-  api.get('/health', (_req, res) => ok(res, { status: 'ok', time: new Date().toISOString() }));
+  api.get('/health', (_req, res) =>
+    ok(res, { status: isConnected() ? 'ok' : 'degraded', database: isConnected() ? 'connected' : 'disconnected', time: new Date().toISOString() })
+  );
+
+  // Everything below needs MongoDB. While it's unreachable, say so plainly instead of hanging.
+  api.use((req, res, next) => {
+    if (isConnected()) return next();
+    sendError(res, 503, 'DB_UNAVAILABLE', DB_DOWN_MESSAGE);
+  });
   api.use('/auth', authRoutes);
   api.use('/users', userRoutes);
   api.use('/invites', inviteRoutes);
@@ -53,6 +69,10 @@ export function createApp() {
     if (err instanceof HttpError) return sendError(res, err.status, err.code, err.message, err.fields);
     if (err?.type === 'entity.parse.failed') return sendError(res, 400, 'BAD_JSON', 'Request body is not valid JSON');
     if (err?.type === 'entity.too.large') return sendError(res, 413, 'TOO_LARGE', 'Request body is too large');
+    if (isMongoConnectivityError(err)) {
+      console.error(`[db] ${req.method} ${req.originalUrl}: ${err.message}`);
+      return sendError(res, 503, 'DB_UNAVAILABLE', DB_DOWN_MESSAGE);
+    }
     console.error(`[error] ${req.method} ${req.originalUrl}`, err);
     sendError(res, 500, 'INTERNAL', 'Something went wrong on the server');
   });

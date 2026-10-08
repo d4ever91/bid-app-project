@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { db, now, save } from '../db.js';
+import { db, now } from '../db.js';
 import { assertValid, ok, rules, validate } from '../http.js';
 import { allow, requireAuth } from '../auth.js';
 import { CYCLES, PLANS, PLAN_IDS, planById, seatCeiling, seatPrice } from '../plans.js';
@@ -12,9 +12,9 @@ router.get('/plans', (_req, res) => ok(res, PLANS));
 
 router.use(requireAuth);
 
-function state(workspace) {
+async function state(workspace) {
   const plan = planById(workspace.plan);
-  const used = seatsUsed(workspace.id);
+  const used = await seatsUsed(workspace._id);
   const unit = seatPrice(plan, workspace.cycle);
   return {
     plan,
@@ -31,13 +31,13 @@ function state(workspace) {
   };
 }
 
-router.get('/', (req, res) => ok(res, state(req.workspace)));
+router.get('/', async (req, res) => ok(res, await state(req.workspace)));
 
 // Billing is Owner-only, matching the `billing:write` scope in the role matrix.
-router.post('/', allow('Owner'), (req, res) => {
+router.post('/', allow('Owner'), async (req, res) => {
   const body = req.body ?? {};
   const plan = planById(body.plan);
-  const used = seatsUsed(req.workspace.id);
+  const used = await seatsUsed(req.workspace._id);
   const ceiling = seatCeiling(plan);
 
   assertValid(
@@ -53,16 +53,15 @@ router.post('/', allow('Owner'), (req, res) => {
     'That plan change needs adjusting'
   );
 
-  const w = req.workspace;
-  const before = `${planById(w.plan).name} (${w.cycle})`;
-  w.plan = plan.id;
-  w.cycle = body.cycle;
-  w.seatsLicensed = Number(body.seats);
-  w.updatedAt = now();
-  save();
+  const before = `${planById(req.workspace.plan).name} (${req.workspace.cycle})`;
+  const w = await db.workspaces.findOneAndUpdate(
+    { _id: req.workspace._id },
+    { $set: { plan: plan.id, cycle: body.cycle, seatsLicensed: Number(body.seats), updatedAt: now() } },
+    { returnDocument: 'after' }
+  );
 
   const after = `${plan.name} (${w.cycle})`;
-  ok(res, state(w), before === after ? `Seats updated to ${w.seatsLicensed}` : `Moved from ${before} to ${after} · ${w.seatsLicensed} seats`);
+  ok(res, await state(w), before === after ? `Seats updated to ${w.seatsLicensed}` : `Moved from ${before} to ${after} · ${w.seatsLicensed} seats`);
 });
 
 /**
@@ -77,11 +76,10 @@ router.post('/portal-session', allow('Owner'), (_req, res) => {
   ok(res, { url: null }, "The billing portal isn't set up on this server yet.");
 });
 
-router.get('/invoices', (req, res) => {
-  const rows = db.invoices
-    .filter((i) => i.workspaceId === req.workspace.id)
-    .sort((a, b) => Date.parse(b.issued) - Date.parse(a.issued))
-    .map(({ id, period, issued, amount, status, pdf }) => ({ id, period, issued, amount, status, pdf: pdf ?? null }));
+router.get('/invoices', async (req, res) => {
+  const rows = (await db.invoices.find({ workspaceId: req.workspace._id }).sort({ issued: -1 }).toArray()).map(
+    ({ number, period, issued, amount, status, pdf }) => ({ id: number, period, issued, amount, status, pdf: pdf ?? null })
+  );
   ok(res, rows, rows.length ? null : 'No invoices yet');
 });
 

@@ -6,6 +6,7 @@ typed component events.
 ## Run
 
     npm install
+    npm run db:up               # MongoDB on :27017 (Docker) — or set MONGODB_URI, see below
     npm run dev                 # API on :4000 + app on :5173, together
 
 `npm run dev` starts both the API (`server/`) and the Vite app, and installs the API's
@@ -17,15 +18,31 @@ Open http://localhost:5173 and sign in as `a.mercer@ordinal.io` / `ordinal-dev-p
 or create a new workspace from "Create a workspace".
 
     npm run check               # svelte-check type pass
-    npm run api:test            # API end-to-end tests
-    npm run api:seed            # reset the API's demo data (restart the API afterwards)
+    npm run api:seed            # wipe MongoDB and load all demo data again
+    npm run api:test            # API end-to-end tests (need MongoDB; uses a throwaway database)
 
 ## API server (`server/`)
 
-Express 5 API that implements every call in `src/api.ts`. Data lives in a JSON file
-(`server/data/db.json`, git-ignored) so there's no database to install. The first start seeds
-the demo workspaces, users and bids. The route code only touches the `db.*` collections in
-`server/src/db.js`, so moving to Postgres or Mongo later is contained to that layer.
+Express 5 API that implements every call in `src/api.ts`, storing everything in **MongoDB**
+through the official `mongodb` driver.
+
+**MongoDB setup.** Either run it locally with Docker (`npm run db:up`, uses
+`docker-compose.yml`), or point the API at any MongoDB — e.g. a free MongoDB Atlas cluster —
+by setting `MONGODB_URI` in `server/.env` (copy `server/.env.example`). The default is
+`mongodb://127.0.0.1:27017/ordinal_bids`.
+
+**Seeding.** On start, if the database has no workspaces, the API seeds all the demo data:
+2 workspaces, 14 users, pending invites, 6 bids with tasks and notes, and 3 invoices.
+`npm run api:seed` wipes the app's collections and seeds again at any time.
+
+**Collections:** `workspaces` (incl. the signup company answers), `users`, `invites`, `bids`
+(tasks and notes embedded), `invoices`, `refreshTokens` and `resetTokens` (hashed, TTL-indexed so
+expired ones are removed automatically), `settings`. Ids are ObjectIds and dates are real
+Dates; filtering, sorting and paging for the users and bids lists happen in MongoDB. Indexes are
+created on start (unique workspace domain, unique bid reference per workspace, token hashes).
+
+If MongoDB isn't reachable, the API keeps running and retries every few seconds; meanwhile
+requests get a 503 that says "The API can't reach MongoDB…", which the app shows on screen.
 
 | Area | Endpoints |
 | --- | --- |
@@ -55,8 +72,8 @@ the demo workspaces, users and bids. The route code only touches the `db.*` coll
   directly; in development the Vite proxy makes requests same-origin anyway. Add production
   origins to `CORS_ORIGINS`.
 
-Config lives in `server/.env` — copy `server/.env.example`. In production set `NODE_ENV=production`
-and `JWT_SECRET`, or the API refuses to start.
+Config lives in `server/.env` — copy `server/.env.example`. In production set `NODE_ENV=production`,
+`JWT_SECRET` (the API refuses to start without it) and `MONGODB_URI`.
 
 ## Structure
 

@@ -15,14 +15,17 @@ const router = Router();
 router.use(requireAuth);
 
 const DAY = 864e5;
-const daysSince = (iso) => (iso ? Math.round((Date.now() - Date.parse(iso)) / DAY) : null);
-const daysUntil = (iso) => (iso ? Math.round((Date.parse(iso) - Date.now()) / DAY) : null);
+const ms = (d) => new Date(d).getTime();
+const daysSince = (d) => (d ? Math.round((Date.now() - ms(d)) / DAY) : null);
+const daysUntil = (d) => (d ? Math.round((ms(d) - Date.now()) / DAY) : null);
 const money = (v) => '£' + Math.round(v).toLocaleString('en-GB');
 const list = (items) => items.join(', ');
 
-function context(workspace) {
-  const users = db.users.filter((u) => u.workspaceId === workspace.id && !u.deletedAt);
-  const bids = db.bids.filter((b) => b.workspaceId === workspace.id && !b.deletedAt);
+async function context(workspace) {
+  const [users, bids] = await Promise.all([
+    db.users.find({ workspaceId: workspace._id, deletedAt: null }, { projection: { passwordHash: 0 } }).toArray(),
+    db.bids.find({ workspaceId: workspace._id, deletedAt: null }).toArray()
+  ]);
   return { users, bids };
 }
 
@@ -96,7 +99,7 @@ function answerLocally(question, { users, bids }) {
     const open = bids.filter((b) => !['Won', 'Lost'].includes(b.stage));
     const soon = open
       .filter((b) => b.stage !== 'Submitted' && daysUntil(b.dueAt) !== null && daysUntil(b.dueAt) >= 0 && daysUntil(b.dueAt) <= 7)
-      .sort((a, b) => Date.parse(a.dueAt) - Date.parse(b.dueAt));
+      .sort((a, b) => ms(a.dueAt) - ms(b.dueAt));
     const pipeline = open.reduce((s, b) => s + (b.value ?? 0), 0);
     return (
       `${open.length} open bid(s) worth ${money(pipeline)}.` +
@@ -142,7 +145,7 @@ function cleanMessages(raw) {
 
 async function reply(req, rawMessages) {
   const messages = cleanMessages(rawMessages);
-  const data = context(req.workspace);
+  const data = await context(req.workspace);
   if (!config.anthropicApiKey) return answerLocally(messages[messages.length - 1].content, data);
 
   const system = `${systemPrompt(req)}\n\nAccounts:\n${rosterText(data.users)}\n\nBids:\n${pipelineText(data.bids)}`;

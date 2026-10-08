@@ -1,37 +1,39 @@
 /**
- * End-to-end tests against a real server on a random port with a throwaway data file.
+ * End-to-end tests: a real API server on a random port, backed by a throwaway MongoDB database.
  * Run: npm test
  */
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
 
-const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ordinal-api-'));
-process.env.DATA_FILE = path.join(dir, 'db.json');
+// Uses a throwaway database on the MongoDB from TEST_MONGODB_URI (default: local MongoDB),
+// dropped again when the run finishes.
+const uri = process.env.TEST_MONGODB_URI ?? 'mongodb://127.0.0.1:27017';
+const dbName = `ordinal_test_${Date.now()}_${process.pid}`;
 process.env.ANTHROPIC_API_KEY = '';
 
-const { load } = await import('../src/db.js');
+const { connect, disconnect, dropDatabase } = await import('../src/db.js');
 const { seed, DEMO_PASSWORD } = await import('../src/seed.js');
-const { ensureSecret } = await import('../src/auth.js');
 const { createApp } = await import('../src/app.js');
 
 let server;
 let base;
 
 before(async () => {
+  try {
+    await connect(uri, dbName);
+  } catch (err) {
+    throw new Error(`Tests need MongoDB at ${uri} (set TEST_MONGODB_URI). ${err.message}`);
+  }
   await seed();
-  load();
-  ensureSecret();
   server = createApp().listen(0);
   await new Promise((r) => server.once('listening', r));
   base = `http://127.0.0.1:${server.address().port}/api`;
 });
 
-after(() => {
+after(async () => {
   server?.close();
-  fs.rmSync(dir, { recursive: true, force: true });
+  await dropDatabase().catch(() => undefined);
+  await disconnect();
 });
 
 /** Minimal client that keeps the refresh cookie and access token like the browser does. */
@@ -334,4 +336,54 @@ test('assistant: suggestions and grounded local answers', async () => {
   const bids = await c.post('/assistant/chat', { messages: [{ role: 'user', content: 'What bids are due this week?' }] });
   assert.match(bids.body.data.reply, /BID-2418/);
   assert.equal((await c.post('/assistant/chat', { messages: [] })).status, 400);
+});
+
+test('data is persisted in MongoDB with real types, indexes and DB-side sorting', async () => {
+  const { db, ObjectId } = await import('../src/db.js');
+  const c = await owner();
+
+  // Stored documents use ObjectIds and Dates, and never expose hashes through the API.
+  const avery = await db.users.findOne({ email: 'a.mercer@ordinal.io' });
+  assert.ok(avery._id instanceof ObjectId);
+  assert.ok(avery.workspaceId instanceof ObjectId);
+  assert.ok(avery.createdAt instanceof Date);
+  assert.ok(avery.passwordHash.startsWith('$2'));
+
+  const created = await c.post('/bids', { title: 'Persisted bid', client: 'Mongo Council', due: '2031-03-01' });
+  const stored = await db.bids.findOne({ _id: new ObjectId(created.body.data._id) });
+  assert.equal(stored.title, 'Persisted bid');
+  assert.ok(stored.dueAt instanceof Date);
+  assert.equal(stored.workspaceId.toString(), avery.workspaceId.toString());
+
+  // Unique index on (workspaceId, reference).
+  await assert.rejects(db.bids.insertOne({ workspaceId: avery.workspaceId, reference: stored.reference }), (e) => e.code === 11000);
+
+  // Role sort comes from MongoDB via the stored roleRank: Owners first, Read-only last.
+  const byRole = (await c.get('/users?sort=role&limit=100')).body.data.map((u) => u.role);
+  assert.equal(byRole[0], 'Owner');
+  assert.equal(byRole.at(-1), 'Read-only');
+
+  // Due-date sort puts bids without a due date last.
+  await c.post('/bids', { title: 'No due date yet', client: 'TBC Ltd' });
+  const byDue = (await c.get('/bids?sort=due&limit=100')).body.data;
+  assert.equal(byDue.at(-1).title, 'No due date yet');
+
+  // Refresh tokens are stored hashed, never in plain text.
+  const tokens = await db.refreshTokens.find({ userId: avery._id }).toArray();
+  assert.ok(tokens.length >= 1);
+  assert.ok(tokens.every((t) => /^[a-f0-9]{64}$/.test(t.hash) && t.expiresAt instanceof Date));
+});
+
+test('API answers 503 with a clear message while MongoDB is unreachable', async () => {
+  const { disconnect, connect } = await import('../src/db.js');
+  await disconnect();
+  try {
+    const r = await client().post('/auth/login', { email: 'a.mercer@ordinal.io', password: DEMO_PASSWORD });
+    assert.equal(r.status, 503);
+    assert.equal(r.body.error.code, 'DB_UNAVAILABLE');
+    assert.match(r.body.message, /MongoDB/);
+    assert.equal((await client().get('/health')).body.data.database, 'disconnected');
+  } finally {
+    await connect(uri, dbName);
+  }
 });
