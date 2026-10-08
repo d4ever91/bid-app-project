@@ -44,7 +44,8 @@
 
   $: account = [
     { key: 'profile', icon: ICONS.profile, label: 'Your profile', badge: '', active: screen === 'profile' },
-    { key: 'billing', icon: ICONS.billing, label: 'Subscription', badge: planName, active: screen === 'billing' }
+    { key: 'billing', icon: ICONS.billing, label: 'Subscription', badge: planName, active: screen === 'billing' },
+    { key: 'settings', icon: ICONS.settings, label: 'Settings', badge: '', active: screen === 'settings' }
   ] as NavItem[];
 </script>
 

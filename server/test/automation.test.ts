@@ -17,6 +17,8 @@ const hoodiecrow = require('hoodiecrow-imap');
 
 const OPENAI_KEY = 'sk-test-openai-123456';
 const GEMINI_KEY = 'AIza-test-gemini-987654';
+const ANTHROPIC_KEY = 'sk-ant-test-claude-555777';
+const claudeCalls: Array<{ model: string; system: string; question: string }> = [];
 const calls: Array<{ provider: string; model: string; files: number; strict?: boolean; text: string }> = [];
 
 function answerFor(text: string) {
@@ -62,6 +64,13 @@ function startFakeAi(): Promise<void> {
         const text = parts.find((p) => p.type === 'text').text as string;
         calls.push({ provider: 'openai', model: json.model, files: parts.filter((p) => p.type === 'file').length, strict: json.response_format?.json_schema?.strict, text });
         return send(200, { choices: [{ message: { role: 'assistant', content: JSON.stringify(answerFor(text)) } }] });
+      }
+      if (req.url === '/anthropic/messages') {
+        if (req.headers['x-api-key'] !== ANTHROPIC_KEY) return send(401, { type: 'error', error: { type: 'authentication_error', message: 'invalid x-api-key' } });
+        assert.equal(req.headers['anthropic-version'], '2023-06-01');
+        const question = json.messages[json.messages.length - 1].content as string;
+        claudeCalls.push({ model: json.model, system: json.system, question });
+        return send(200, { type: 'message', role: 'assistant', content: [{ type: 'text', text: 'Claude says: ' + question }], stop_reason: 'end_turn' });
       }
       const m = req.url?.match(/^\/gemini\/models\/([^:]+):generateContent$/);
       if (m) {
@@ -122,6 +131,8 @@ before(async () => {
   aiBase = `http://127.0.0.1:${(aiServer.address() as AddressInfo).port}`;
   process.env.OPENAI_BASE_URL = aiBase + '/openai';
   process.env.GEMINI_BASE_URL = aiBase + '/gemini';
+  process.env.ANTHROPIC_BASE_URL = aiBase + '/anthropic';
+  delete process.env.ANTHROPIC_API_KEY;
   await startImap();
 
   const dbm = await import('../src/db.js');
@@ -322,4 +333,61 @@ test('pasted emails: Gemini, duplicates, PDF attachments, missing key → failed
   const again = await api('POST', `/automation/inbox/${failed.body.data.item.id}/reprocess`);
   assert.equal(again.status, 200, JSON.stringify(again.body));
   assert.equal(again.body.data.item.status, 'bid_created');
+});
+
+test('integrations: Anthropic key powers the assistant, then falls back when removed', async () => {
+  const api = await login();
+  const ask = async () => (await api('POST', '/assistant/chat', { messages: [{ role: 'user', content: 'Which bids are due in the next 7 days?' }] })).body.data.reply as string;
+
+  // No key anywhere: built-in answers, no call to Claude.
+  let r = await api('GET', '/automation/settings');
+  assert.equal(r.body.data.anthropic.hasKey, false);
+  assert.equal(r.body.data.anthropic.serverKey, false);
+  assert.equal(r.body.data.anthropic.model, 'claude-sonnet-5-5');
+  assert.ok(r.body.data.anthropic.suggestions.length > 0);
+  const before = claudeCalls.length;
+  assert.doesNotMatch(await ask(), /^Claude says/);
+  assert.equal(claudeCalls.length, before);
+
+  // Test with a wrong key, then the right one (not yet saved).
+  r = await api('POST', '/automation/test-ai', { provider: 'anthropic' });
+  assert.equal(r.status, 400);
+  assert.ok(r.body.error.details.fields['anthropic.apiKey']);
+  r = await api('POST', '/automation/test-ai', { provider: 'anthropic', apiKey: 'sk-ant-wrong' });
+  assert.equal(r.status, 502);
+  r = await api('POST', '/automation/test-ai', { provider: 'anthropic', apiKey: ANTHROPIC_KEY });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.match(r.body.message, /^Anthropic \(claude-sonnet-5-5\) works/);
+
+  // Save it: encrypted at rest, masked in the API, used by the assistant with the chosen model.
+  r = await api('PUT', '/automation/settings', { anthropic: { apiKey: ANTHROPIC_KEY, model: 'claude-haiku-5-5' } });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.data.anthropic.hasKey, true);
+  assert.equal(r.body.data.anthropic.model, 'claude-haiku-5-5');
+  assert.ok(!JSON.stringify(r.body).includes(ANTHROPIC_KEY));
+  assert.match(r.body.data.anthropic.keyHint, /5777$/);
+  const doc = await mod.db.automationSettings.findOne({});
+  assert.ok(doc.anthropic.apiKey && !JSON.stringify(doc.anthropic).includes(ANTHROPIC_KEY));
+
+  assert.equal(await ask(), 'Claude says: Which bids are due in the next 7 days?');
+  const last = claudeCalls[claudeCalls.length - 1];
+  assert.equal(last.model, 'claude-haiku-5-5');
+  assert.match(last.system, /Bids:/);
+
+  // Saving other settings keeps the key; removing it falls back to built-in answers.
+  r = await api('PUT', '/automation/settings', { pollMinutes: 10 });
+  assert.equal(r.body.data.anthropic.hasKey, true);
+  r = await api('PUT', '/automation/settings', { anthropic: { apiKey: '' } });
+  assert.equal(r.body.data.anthropic.hasKey, false);
+  const n = claudeCalls.length;
+  assert.doesNotMatch(await ask(), /^Claude says/);
+  assert.equal(claudeCalls.length, n);
+});
+
+test('integrations: only Owners and Admins can set the Anthropic key', async () => {
+  const users = await mod.db.users.find({ role: 'Engineer' }).toArray();
+  if (!users.length) return;
+  const api = await login(users[0].email);
+  const r = await api('PUT', '/automation/settings', { anthropic: { apiKey: ANTHROPIC_KEY } });
+  assert.equal(r.status, 403);
 });

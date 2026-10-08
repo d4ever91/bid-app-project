@@ -113,8 +113,9 @@ requests get a 503 that says "The API can't reach MongoDB…", which the app sho
   `inviteToken`.
 - **Payments:** no Stripe integration yet. Checkout and portal endpoints return `url: null`
   with a message, and a "Pay now" signup starts on the 14-day trial instead.
-- **Assistant:** answers from live workspace data out of the box; set `ANTHROPIC_API_KEY` in
-  `server/.env` to route chat to Claude instead.
+- **Assistant:** answers from live workspace data out of the box. Add an Anthropic key under
+  **Settings → Integrations** (per workspace), or set `ANTHROPIC_API_KEY` in `server/.env` as a
+  server-wide fallback, to route chat to Claude instead.
 - **CORS:** `http://localhost:5173` is allowed (with credentials) for clients that call the API
   directly; in development the Vite proxy makes requests same-origin anyway. Add production
   origins to `CORS_ORIGINS`.
@@ -149,6 +150,7 @@ Config lives in `server/.env` — copy `server/.env.example`. In production set 
       icons.ts                   inline SVG bodies for the sidebar
         Profile.svelte           your account: details, notifications, sessions, security
         Billing.svelte           plan tiers, usage, invoices, payment method
+        Settings.svelte          Settings → Integrations: OpenAI, Gemini, Anthropic and Gmail keys
       subscription.ts            plans, seats, usage, invoices, sessions, money helpers
         Bids.svelte              bid pipeline: KPIs, stage mix, filterable list
         BidDetail.svelte         one bid: checklist, log, readiness, facts
@@ -289,12 +291,28 @@ On the Subscription screen, plan changes call `POST /subscription` when a sessio
 (and fall back to the fixture behaviour in demo mode), "Pay now" opens Checkout, and
 "Update card" opens the Stripe billing portal.
 
+## Settings → Integrations
+
+**Settings** (sidebar → Account, Owner/Admin only) is the one place to connect every service:
+
+| Integration | Used for | Get a key |
+| --- | --- | --- |
+| OpenAI | Reading bid emails (when chosen with **Use for bid emails**) | <https://platform.openai.com/api-keys> |
+| Google Gemini | Reading bid emails (when chosen) | <https://aistudio.google.com/apikey> |
+| Anthropic Claude | The AI assistant | <https://console.anthropic.com/settings/keys> |
+| Gmail | The mailbox the Bid inbox watches (address + app password + folder) | <https://myaccount.google.com/apppasswords> |
+
+Each card has **Save**, **Test** (one small real request, with the typed or the saved key) and
+**Remove key** / **Disconnect**, plus a model field with suggestions. Keys are encrypted at rest
+and only a hint such as `sk-…a1b2` is ever shown again. Without an Anthropic key in the workspace,
+the assistant uses the server's `ANTHROPIC_API_KEY` if set, else its built-in answers.
+
 ## Bid automation: emails → AI → bids
 
 **Bid inbox** (sidebar) watches a Gmail mailbox, has OpenAI or Gemini read each new email, and
 turns bid opportunities into bids automatically.
 
-**Set up (Bid inbox → Settings, Owner/Admin only):**
+**Set up (Settings → Integrations, or Bid inbox → Settings; Owner/Admin only):**
 
 1. **AI provider** — choose OpenAI or Gemini and paste an API key
    ([OpenAI keys](https://platform.openai.com/api-keys) · [Gemini keys](https://aistudio.google.com/apikey)).
@@ -331,7 +349,7 @@ Details:
 - Every automated action is in the audit log (Overview → Recent access events).
 - Usage is billed by your AI provider; roughly one small request per email.
 
-API: `GET/PUT /automation/settings` · `POST /automation/test-ai` · `/test-mailbox` · `/run` ·
+API: `GET/PUT /automation/settings` (incl. `anthropic {apiKey, model}`) · `POST /automation/test-ai` (`provider`: `openai` | `gemini` | `anthropic`) · `/test-mailbox` · `/run` ·
 `/ingest` · `GET /automation/inbox` · `POST /automation/inbox/:id/create-bid` · `/ignore` · `/reprocess`.
 
 ## Talking to the API

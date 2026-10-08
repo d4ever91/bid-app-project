@@ -58,7 +58,9 @@ export const config = {
   /** Set to false to stop the background mailbox poller (e.g. on extra API instances). */
   mailPolling: (process.env.MAIL_POLLING ?? 'true') !== 'false',
 
+  /** Server-wide fallback for the AI assistant; a workspace key set in Settings → Integrations wins. */
   anthropicApiKey: process.env.ANTHROPIC_API_KEY ?? '',
+  anthropicBaseUrl: (process.env.ANTHROPIC_BASE_URL ?? 'https://api.anthropic.com/v1').replace(/\/$/, ''),
   anthropicModel: process.env.ANTHROPIC_MODEL ?? 'claude-sonnet-5-5'
 };
 

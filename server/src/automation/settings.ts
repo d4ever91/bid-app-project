@@ -4,9 +4,10 @@
  */
 import type { ObjectId } from 'mongodb';
 import { db, newId, now } from '../db.js';
+import { config } from '../config.js';
 import { decryptSecret, maskSecret } from '../secrets.js';
 import type { AiProvider, AutomationSettingsDoc } from '../types.js';
-import { DEFAULT_MODELS, MODEL_SUGGESTIONS } from './ai.js';
+import { DEFAULT_ANTHROPIC_MODEL, DEFAULT_MODELS, MODEL_SUGGESTIONS } from './ai.js';
 
 export const GMAIL_IMAP = { host: 'imap.gmail.com', port: 993, secure: true };
 
@@ -19,6 +20,7 @@ export function defaultSettings(workspaceId: ObjectId): AutomationSettingsDoc {
     provider: 'openai',
     openai: { apiKey: null, model: DEFAULT_MODELS.openai },
     gemini: { apiKey: null, model: DEFAULT_MODELS.gemini },
+    anthropic: { apiKey: null, model: DEFAULT_ANTHROPIC_MODEL },
     mailbox: {
       ...GMAIL_IMAP,
       user: '',
@@ -39,7 +41,11 @@ export function defaultSettings(workspaceId: ObjectId): AutomationSettingsDoc {
 }
 
 export async function loadSettings(workspaceId: ObjectId): Promise<AutomationSettingsDoc> {
-  return (await db.automationSettings.findOne({ workspaceId })) ?? defaultSettings(workspaceId);
+  const saved = await db.automationSettings.findOne({ workspaceId });
+  if (!saved) return defaultSettings(workspaceId);
+  // Settings saved before a field existed get its default.
+  const defaults = defaultSettings(workspaceId);
+  return { ...defaults, ...saved, anthropic: saved.anthropic ?? defaults.anthropic, mailbox: { ...defaults.mailbox, ...saved.mailbox } };
 }
 
 export const apiKeyFor = (s: AutomationSettingsDoc, provider: AiProvider = s.provider): string | null =>
@@ -49,6 +55,15 @@ export const modelFor = (s: AutomationSettingsDoc, provider: AiProvider = s.prov
   s[provider].model || DEFAULT_MODELS[provider];
 
 export const mailboxPassword = (s: AutomationSettingsDoc): string | null => decryptSecret(s.mailbox.password);
+
+/** The Claude key and model for the AI assistant: the workspace's own, else the server's. */
+export function anthropicFor(s: AutomationSettingsDoc): { apiKey: string | null; model: string; source: 'workspace' | 'server' | null } {
+  const own = decryptSecret(s.anthropic?.apiKey);
+  const model = s.anthropic?.model || DEFAULT_ANTHROPIC_MODEL;
+  if (own) return { apiKey: own, model, source: 'workspace' };
+  if (config.anthropicApiKey) return { apiKey: config.anthropicApiKey, model: config.anthropicModel, source: 'server' };
+  return { apiKey: null, model, source: null };
+}
 
 /** What the Settings screen sees — secrets are reduced to "set / not set" plus a short hint. */
 export function publicSettings(s: AutomationSettingsDoc) {
@@ -63,6 +78,17 @@ export function publicSettings(s: AutomationSettingsDoc) {
     provider: s.provider,
     openai: key('openai'),
     gemini: key('gemini'),
+    anthropic: (() => {
+      const own = decryptSecret(s.anthropic?.apiKey);
+      return {
+        hasKey: !!own,
+        keyHint: maskSecret(own),
+        model: s.anthropic?.model || DEFAULT_ANTHROPIC_MODEL,
+        suggestions: MODEL_SUGGESTIONS.anthropic,
+        /** The server has its own key, used when the workspace hasn't set one. */
+        serverKey: !!config.anthropicApiKey
+      };
+    })(),
     mailbox: {
       host: s.mailbox.host,
       port: s.mailbox.port,

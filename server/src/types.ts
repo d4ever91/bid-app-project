@@ -226,6 +226,8 @@ export interface AutomationSettingsDoc {
   provider: AiProvider;
   openai: { apiKey: EncryptedSecret | null; model: string };
   gemini: { apiKey: EncryptedSecret | null; model: string };
+  /** Claude, used by the AI assistant (not for reading emails). */
+  anthropic: { apiKey: EncryptedSecret | null; model: string };
   mailbox: {
     host: string;
     port: number;

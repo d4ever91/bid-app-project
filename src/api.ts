@@ -577,6 +577,8 @@ export interface AutomationSettings {
   provider: AiProvider;
   openai: ProviderSettings;
   gemini: ProviderSettings;
+  /** Claude, used by the AI assistant. serverKey: the server has its own key as a fallback. */
+  anthropic: ProviderSettings & { serverKey: boolean };
   mailbox: {
     host: string;
     port: number;
@@ -599,6 +601,7 @@ export interface AutomationSettingsPatch {
   provider?: AiProvider;
   openai?: { apiKey?: string; model?: string };
   gemini?: { apiKey?: string; model?: string };
+  anthropic?: { apiKey?: string; model?: string };
   mailbox?: { user?: string; password?: string; folder?: string; host?: string; port?: number; secure?: boolean };
   autoCreateThreshold?: number;
   pollMinutes?: number;
@@ -659,7 +662,9 @@ export const saveAutomationSettings = async (patchBody: AutomationSettingsPatch)
   return { settings: body.data, message: body.message };
 };
 
-export const testAiProvider = async (provider: AiProvider, apiKey?: string, model?: string): Promise<string | null> =>
+export type IntegrationProvider = AiProvider | 'anthropic';
+
+export const testAiProvider = async (provider: IntegrationProvider, apiKey?: string, model?: string): Promise<string | null> =>
   (await post<unknown>('/automation/test-ai', { provider, apiKey: apiKey || undefined, model: model || undefined })).message;
 
 export const testMailboxConnection = async (input: { user?: string; password?: string; folder?: string; host?: string; port?: number; secure?: boolean }): Promise<string | null> =>

@@ -12,6 +12,8 @@ import { db } from '../db.js';
 import { HttpError, badRequest, bodyOf, ok } from '../http.js';
 import { ctx, requireAuth } from '../auth.js';
 import { currentUsage } from './subscription.js';
+import { callAnthropic } from '../automation/ai.js';
+import { anthropicFor, loadSettings } from '../automation/settings.js';
 import type { BidDoc, UserDoc, WorkspaceDoc } from '../types.js';
 
 const router = Router();
@@ -128,19 +130,6 @@ export function answerLocally(question: string, { users, bids }: Context): strin
   return `${users.length} accounts (${active} active) and ${bids.length} bids in this workspace. Ask about MFA gaps, stale passwords, suspended accounts, privileged roles or bids due soon.`;
 }
 
-async function askClaude(system: string, messages: Message[]): Promise<string> {
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-api-key': config.anthropicApiKey, 'anthropic-version': '2023-06-01' },
-    body: JSON.stringify({ model: config.anthropicModel, max_tokens: 600, system, messages })
-  });
-  const body = (await res.json().catch(() => null)) as { content?: Array<{ type: string; text?: string }>; error?: { message?: string } } | null;
-  if (!res.ok) {
-    console.error('[assistant] model error', res.status, body?.error?.message);
-    throw new HttpError(502, 'ASSISTANT_UNAVAILABLE', 'The assistant is unavailable right now — try again shortly');
-  }
-  return (body?.content ?? []).filter((c) => c.type === 'text').map((c) => c.text ?? '').join('').trim();
-}
 
 function cleanMessages(raw: unknown): Message[] {
   if (!Array.isArray(raw) || !raw.length) throw badRequest('Send at least one message');
@@ -164,9 +153,16 @@ async function reply(req: Request, rawMessages: unknown): Promise<string> {
   await db.workspaces.updateOne({ _id: workspace._id }, { $inc: { 'usage.aiQueries': 1 } });
 
   const question = messages[messages.length - 1].content;
-  if (!config.anthropicApiKey) return answerLocally(question, data);
+  // The workspace's own Claude key (Settings → Integrations), else the server's, else built-in answers.
+  const claude = anthropicFor(await loadSettings(workspace._id));
+  if (!claude.apiKey) return answerLocally(question, data);
   const system = `${systemPrompt(req)}\n\nAccounts:\n${rosterText(data.users)}\n\nBids:\n${pipelineText(data.bids)}`;
-  return (await askClaude(system, messages)) || answerLocally(question, data);
+  try {
+    return (await callAnthropic(claude.apiKey, claude.model, system, messages)) || answerLocally(question, data);
+  } catch (err) {
+    console.error('[assistant]', (err as Error).message);
+    throw err instanceof HttpError ? err : new HttpError(502, 'ASSISTANT_UNAVAILABLE', 'The assistant is unavailable right now — try again shortly');
+  }
 }
 
 router.get('/suggestions', (_req, res) => {

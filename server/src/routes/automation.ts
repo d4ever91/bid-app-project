@@ -16,10 +16,10 @@ import { audit } from '../audit.js';
 import { encryptSecret } from '../secrets.js';
 import { publicBid } from '../serialize.js';
 import { AI_PROVIDERS, MAIL_STATUSES, type AiProvider, type AutomationSettingsDoc, type MailItemDoc, type MailStatus } from '../types.js';
-import { DEFAULT_MODELS, testProvider } from '../automation/ai.js';
+import { DEFAULT_ANTHROPIC_MODEL, DEFAULT_MODELS, testAnthropic, testProvider } from '../automation/ai.js';
 import { parseRawEmail, testMailbox, type IncomingEmail } from '../automation/mailbox.js';
 import { companyContext, createBidFromMail, pollWorkspace, processEmail, type BidOverrides } from '../automation/pipeline.js';
-import { apiKeyFor, defaultSettings, loadSettings, mailboxPassword, modelFor, publicSettings } from '../automation/settings.js';
+import { anthropicFor, apiKeyFor, defaultSettings, loadSettings, mailboxPassword, modelFor, publicSettings } from '../automation/settings.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -39,6 +39,7 @@ router.put('/settings', admins, async (req, res) => {
   const body = bodyOf(req.body);
   const openai = bodyOf(body.openai);
   const gemini = bodyOf(body.gemini);
+  const anthropic = bodyOf(body.anthropic);
   const mailbox = bodyOf(body.mailbox);
 
   assertValid(
@@ -52,6 +53,7 @@ router.put('/settings', admins, async (req, res) => {
       }),
       ...validate(openai, { apiKey: [rules.maxLen(400)], model: [rules.maxLen(80)] }, 'openai.'),
       ...validate(gemini, { apiKey: [rules.maxLen(400)], model: [rules.maxLen(80)] }, 'gemini.'),
+      ...validate(anthropic, { apiKey: [rules.maxLen(400)], model: [rules.maxLen(80)] }, 'anthropic.'),
       ...validate(
         mailbox,
         {
@@ -77,13 +79,16 @@ router.put('/settings', admins, async (req, res) => {
   if (body.pollMinutes !== undefined) set.pollMinutes = Number(body.pollMinutes);
 
   const changes: string[] = [];
-  for (const [provider, input] of [['openai', openai], ['gemini', gemini]] as const) {
+  const names = { openai: 'OpenAI', gemini: 'Gemini', anthropic: 'Anthropic' } as const;
+  for (const [provider, input] of [['openai', openai], ['gemini', gemini], ['anthropic', anthropic]] as const) {
     if (input.apiKey !== undefined) {
       const key = clean(input.apiKey);
       set[`${provider}.apiKey`] = key ? encryptSecret(key) : null;
-      changes.push(`${key ? 'set' : 'removed'} the ${provider === 'openai' ? 'OpenAI' : 'Gemini'} API key`);
+      changes.push(`${key ? 'set' : 'removed'} the ${names[provider]} API key`);
     }
-    if (input.model !== undefined) set[`${provider}.model`] = clean(input.model) || DEFAULT_MODELS[provider];
+    if (input.model !== undefined) {
+      set[`${provider}.model`] = clean(input.model) || (provider === 'anthropic' ? DEFAULT_ANTHROPIC_MODEL : DEFAULT_MODELS[provider]);
+    }
   }
 
   const newUser = mailbox.user !== undefined ? clean(mailbox.user).toLowerCase() : undefined;
@@ -144,6 +149,16 @@ router.post('/test-ai', admins, async (req, res) => {
   const { workspace } = ctx(req);
   const body = bodyOf(req.body);
   const settings = await loadSettings(workspace._id);
+
+  if (body.provider === 'anthropic') {
+    const saved = anthropicFor(settings);
+    const apiKey = clean(body.apiKey) || saved.apiKey;
+    if (!apiKey) throw badRequest('Enter an Anthropic API key first', { 'anthropic.apiKey': 'Enter an API key' });
+    const model = clean(body.model) || settings.anthropic.model;
+    const { ms } = await testAnthropic(apiKey, model);
+    return ok(res, { provider: 'anthropic', model, ms }, `Anthropic (${model}) works — answered in ${(ms / 1000).toFixed(1)}s`);
+  }
+
   const provider = isProvider(body.provider) ? body.provider : settings.provider;
   const apiKey = clean(body.apiKey) || apiKeyFor(settings, provider);
   if (!apiKey) throw badRequest(`Enter a ${provider === 'openai' ? 'OpenAI' : 'Gemini'} API key first`, { [`${provider}.apiKey`]: 'Enter an API key' });

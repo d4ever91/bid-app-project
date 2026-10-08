@@ -16,6 +16,7 @@
   import NewBid from './lib/NewBid.svelte';
   import Profile from './lib/Profile.svelte';
   import Billing from './lib/Billing.svelte';
+  import Settings from './lib/Settings.svelte';
   import { USERS, TOTAL_USERS, initials } from './data';
   import { BIDS, BID_STAGES } from './bids';
   import { CURRENT_PLAN, planById } from './subscription';
@@ -492,6 +493,7 @@
     screen === 'automation' ? 'bid automation' :
     screen === 'profile' ? 'account / profile' :
     screen === 'billing' ? 'account / subscription' :
+    screen === 'settings' ? 'account / settings / integrations' :
     'overview';
 
   $: onBids = screen === 'bids' || screen === 'bid' || screen === 'newbid';
@@ -602,6 +604,8 @@
           <Profile on:notify={(e) => notify(e.detail)} on:billing={() => (screen = 'billing')} on:renamed={(e) => (meName = e.detail)} />
         {:else if screen === 'billing'}
           <Billing on:notify={(e) => notify(e.detail)} />
+        {:else if screen === 'settings'}
+          <Settings on:notify={(e) => notify(e.detail)} on:inbox={() => (screen = 'automation')} />
         {/if}
       </div>
     </main>

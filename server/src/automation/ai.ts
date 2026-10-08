@@ -16,10 +16,50 @@ export const DEFAULT_MODELS: Record<AiProvider, string> = {
 };
 
 /** Suggestions shown in Settings — any model ID the account can use is accepted. */
-export const MODEL_SUGGESTIONS: Record<AiProvider, string[]> = {
+export const MODEL_SUGGESTIONS: Record<AiProvider | 'anthropic', string[]> = {
   openai: ['gpt-6-luna', 'gpt-6.1-sol', 'gpt-6-astra'],
-  gemini: ['gemini-3.5-flash', 'gemini-3.8-flash', 'gemini-3.5-flash-lite']
+  gemini: ['gemini-3.5-flash', 'gemini-3.8-flash', 'gemini-3.5-flash-lite'],
+  anthropic: ['claude-sonnet-5-5', 'claude-haiku-5-5', 'claude-opus-5-5']
 };
+
+export const DEFAULT_ANTHROPIC_MODEL = config.anthropicModel;
+
+/** Explains an Anthropic API error in plain words. */
+export function explainAnthropic(status: number, detail: string | undefined, model: string): string {
+  if (status === 401 || status === 403) return 'Anthropic rejected the API key — update it in Settings → Integrations.';
+  if (status === 404) return `Anthropic doesn't know the model "${model}" (or this key can't use it) — pick another in Settings → Integrations.`;
+  if (status === 429) return 'Anthropic rate limit or credit limit reached — try again later or check your Anthropic Console billing.';
+  if (status === 529) return 'Anthropic is overloaded right now — try again in a minute.';
+  return `Anthropic error ${status}${detail ? ': ' + detail : ''}`;
+}
+
+/** Calls the Anthropic Messages API and returns the text of the reply. */
+export async function callAnthropic(
+  apiKey: string,
+  model: string,
+  system: string,
+  messages: Array<{ role: 'user' | 'assistant'; content: string }>,
+  maxTokens = 600
+): Promise<string> {
+  const { status, json } = await postJson(
+    `${config.anthropicBaseUrl}/messages`,
+    { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+    { model, max_tokens: maxTokens, system, messages }
+  );
+  if (status >= 400) throw new HttpError(502, 'AI_PROVIDER_ERROR', explainAnthropic(status, json?.error?.message, model));
+  return ((json?.content ?? []) as Array<{ type: string; text?: string }>)
+    .filter((c) => c.type === 'text')
+    .map((c) => c.text ?? '')
+    .join('')
+    .trim();
+}
+
+/** "Test" for the Anthropic key: one tiny real request. */
+export async function testAnthropic(apiKey: string, model: string): Promise<{ ms: number; reply: string }> {
+  const started = Date.now();
+  const reply = await callAnthropic(apiKey, model, 'Reply with the single word: ready', [{ role: 'user', content: 'Status check' }], 16);
+  return { ms: Date.now() - started, reply };
+}
 
 export interface EmailForAi {
   from: string;
