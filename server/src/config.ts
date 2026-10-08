@@ -3,14 +3,16 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+/** server/ — one level up from src/ (tsx) or dist/ (compiled). */
 export const SERVER_ROOT = path.resolve(here, '..');
 
 /** Minimal .env loader so `npm run dev` picks up server/.env without another dependency. */
-function loadEnvFile(file) {
+function loadEnvFile(file: string): void {
   if (!fs.existsSync(file)) return;
   for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
+    if (line.trim().startsWith('#')) continue;
     const match = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/i);
-    if (!match || line.trim().startsWith('#')) continue;
+    if (!match) continue;
     const [, key, raw] = match;
     if (process.env[key] !== undefined) continue;
     process.env[key] = raw.replace(/^(['"])(.*)\1$/, '$2');
@@ -18,7 +20,7 @@ function loadEnvFile(file) {
 }
 loadEnvFile(path.join(SERVER_ROOT, '.env'));
 
-const list = (value) =>
+const list = (value: string | undefined): string[] =>
   String(value ?? '')
     .split(',')
     .map((s) => s.trim().replace(/\/$/, ''))
@@ -31,7 +33,7 @@ export const config = {
   /** Browser origins allowed to call the API directly (with cookies). */
   corsOrigins: list(process.env.CORS_ORIGINS ?? 'http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173'),
 
-  /** Where the frontend lives — used to build invite, reset and checkout return links. */
+  /** Where the frontend lives — used to build invite and reset links. */
   appUrl: (process.env.APP_URL ?? 'http://localhost:5173').replace(/\/$/, ''),
 
   /** Empty means: generate one and keep it in the database (fine for local dev only). */

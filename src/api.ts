@@ -208,6 +208,13 @@ export async function fetchPlans(): Promise<Plan[]> {
   return body.data;
 }
 
+export interface UsageMeter {
+  label: string;
+  used: number;
+  limit: number;
+  unit: string;
+}
+
 export interface SubscriptionState {
   plan: Plan;
   cycle: BillingCycle;
@@ -220,6 +227,9 @@ export interface SubscriptionState {
   renewsAt: string | null;
   trialEndsAt: string | null;
   billingEmail?: string;
+  billing?: { cardLabel: string | null; cardExpiry: string | null; address: string | null; vatNumber: string | null };
+  usage?: UsageMeter[];
+  usageResetsAt?: string;
 }
 
 export async function fetchSubscription(): Promise<SubscriptionState> {
@@ -448,6 +458,7 @@ export interface ApiInvoice {
   id: string;
   period: string | null;
   issued: string | null;
+  seats?: number;
   amount: number;
   status: string | null;
   pdf: string | null;
@@ -464,6 +475,90 @@ export const assistantSuggestions = async (): Promise<string[]> =>
 export const assistantChat = async (
   messages: Array<{ role: 'user' | 'assistant'; content: string }>
 ): Promise<string> => (await post<{ reply: string }>('/assistant/chat', { messages })).data.reply;
+
+/* ---------------- overview & audit log ---------------- */
+
+export interface AuditEvent {
+  id: string;
+  at: string;
+  kind: string;
+  actor: string;
+  text: string;
+}
+
+export interface Overview {
+  days: number;
+  tiles: {
+    totalUsers: number;
+    newUsers30d: number;
+    active7d: number;
+    seatsLicensed: number;
+    pendingInvites: number;
+    expiringInvites48h: number;
+    mfaCoverage: number;
+    mfaMissing: number;
+  };
+  signIns: Array<{ date: string; count: number }>;
+  roles: Array<{ role: Role; count: number }>;
+  events: AuditEvent[];
+}
+
+export const fetchOverview = async (): Promise<Overview> => (await get<Overview>('/overview')).data;
+
+/** Recent activity for one account (its latest sign-in plus the changes made to or by it). */
+export const fetchUserActivity = async (id: string): Promise<AuditEvent[]> =>
+  (await get<AuditEvent[]>('/users/' + id + '/activity')).data;
+
+/* ---------------- your profile & sessions ---------------- */
+
+export interface Profile {
+  id: string;
+  name: string;
+  email: string;
+  role: Role;
+  team: string;
+  jobTitle: string;
+  timezone: string;
+  workspace: { name: string; domain: string };
+  notifications: Array<{ key: string; title: string; note: string; on: boolean }>;
+  security: {
+    passwordChangedAt: string | null;
+    mfaEnrolledAt: string | null;
+    mfaMethod: string | null;
+    recoveryCodesLeft: number | null;
+    sessionsActive: number;
+  };
+}
+
+export interface DeviceSession {
+  id: string;
+  device: string;
+  ip: string | null;
+  location: string | null;
+  startedAt: string;
+  lastUsedAt: string;
+  current: boolean;
+}
+
+export const fetchProfile = async (): Promise<Profile> => (await get<Profile>('/auth/profile')).data;
+
+export const saveProfile = async (
+  patchBody: Partial<Pick<Profile, 'name' | 'email' | 'jobTitle' | 'timezone'>>
+): Promise<{ profile: Profile; message: string | null }> => {
+  const body = await patch<Profile>('/auth/profile', patchBody);
+  return { profile: body.data, message: body.message };
+};
+
+export const setNotification = async (key: string, on: boolean): Promise<Profile> =>
+  (await patch<Profile>('/auth/profile/notifications', { key, on })).data;
+
+export const requestOwnPasswordReset = async (): Promise<string | null> =>
+  (await post<{ sentTo: string }>('/auth/profile/password-reset')).message;
+
+export const fetchSessions = async (): Promise<DeviceSession[]> => (await get<DeviceSession[]>('/auth/sessions')).data;
+
+export const signOutOtherSessions = async (): Promise<string | null> =>
+  (await del<{ signedOut: number }>('/auth/sessions/others')).message;
 
 /** Exchanges the refresh cookie for a new access token. Returns false when there's no session. */
 export async function refresh(): Promise<boolean> {

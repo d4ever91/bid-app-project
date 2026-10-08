@@ -2,8 +2,11 @@
  * End-to-end tests: a real API server on a random port, backed by a throwaway MongoDB database.
  * Run: npm test
  */
+/* eslint-disable @typescript-eslint/no-explicit-any -- response bodies are untyped JSON */
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import type { Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 
 // Uses a throwaway database on the MongoDB from TEST_MONGODB_URI (default: local MongoDB),
 // dropped again when the run finishes.
@@ -15,19 +18,19 @@ const { connect, disconnect, dropDatabase } = await import('../src/db.js');
 const { seed, DEMO_PASSWORD } = await import('../src/seed.js');
 const { createApp } = await import('../src/app.js');
 
-let server;
-let base;
+let server: Server | undefined;
+let base = '';
 
 before(async () => {
   try {
     await connect(uri, dbName);
   } catch (err) {
-    throw new Error(`Tests need MongoDB at ${uri} (set TEST_MONGODB_URI). ${err.message}`);
+    throw new Error(`Tests need MongoDB at ${uri} (set TEST_MONGODB_URI). ${(err as Error).message}`);
   }
   await seed();
   server = createApp().listen(0);
-  await new Promise((r) => server.once('listening', r));
-  base = `http://127.0.0.1:${server.address().port}/api`;
+  await new Promise((r) => server!.once('listening', r));
+  base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api`;
 });
 
 after(async () => {
@@ -37,10 +40,16 @@ after(async () => {
 });
 
 /** Minimal client that keeps the refresh cookie and access token like the browser does. */
+interface Reply {
+  status: number;
+  body: any;
+  headers: Headers;
+}
+
 function client() {
   let cookie = '';
-  let token = null;
-  const call = async (method, url, body, extra = {}) => {
+  let token: string | null = null;
+  const call = async (method: string, url: string, body?: unknown, extra: Record<string, string> = {}): Promise<Reply> => {
     const res = await fetch(base + url, {
       method,
       headers: {
@@ -53,18 +62,22 @@ function client() {
     });
     const set = res.headers.getSetCookie?.() ?? [];
     for (const c of set) cookie = c.split(';')[0];
-    const json = res.status === 204 ? null : await res.json();
+    const json: any = res.status === 204 ? null : await res.json();
     if (json?.data?.accessToken) token = json.data.accessToken;
     return { status: res.status, body: json, headers: res.headers };
   };
   return {
-    get: (u) => call('GET', u),
-    post: (u, b) => call('POST', u, b),
-    patch: (u, b) => call('PATCH', u, b),
-    del: (u) => call('DELETE', u),
+    get: (u: string) => call('GET', u),
+    post: (u: string, b?: unknown) => call('POST', u, b),
+    patch: (u: string, b?: unknown) => call('PATCH', u, b),
+    del: (u: string) => call('DELETE', u),
     raw: call,
-    set token(v) { token = v; },
-    get cookie() { return cookie; }
+    set token(v: string | null) {
+      token = v;
+    },
+    get cookie() {
+      return cookie;
+    }
   };
 }
 
@@ -183,9 +196,9 @@ test('users: list, filter, facets, create, edit, role, status, reset, archive, r
   assert.ok(all.body.data[0]._id);
   assert.equal(all.body.data[0].passwordHash, undefined);
 
-  assert.ok((await c.get('/users?role=Admin')).body.data.every((u) => u.role === 'Admin'));
+  assert.ok((await c.get('/users?role=Admin')).body.data.every((u: any) => u.role === 'Admin'));
   assert.ok((await c.get('/users?q=quintero')).body.data.length === 1);
-  assert.ok((await c.get('/users?mfa=missing')).body.data.every((u) => !u.mfaEnrolledAt));
+  assert.ok((await c.get('/users?mfa=missing')).body.data.every((u: any) => !u.mfaEnrolledAt));
 
   const facets = (await c.get('/users/facets')).body.data;
   assert.ok(facets.teams.includes('Platform'));
@@ -223,11 +236,11 @@ test('users: list, filter, facets, create, edit, role, status, reset, archive, r
   const me = (await c.get('/auth/me')).body.data.user;
   assert.equal((await c.patch('/users/' + me.id + '/role', { role: 'Admin' })).status, 403, 'cannot demote self');
 
-  const engineers = (await c.get('/users?role=Engineer')).body.data.map((u) => u._id);
+  const engineers = (await c.get('/users?role=Engineer')).body.data.map((u: any) => u._id);
   const bulk = await c.post('/users/bulk', { ids: [...engineers, me.id, 'missing'], action: 'reset-password' });
   assert.equal(bulk.status, 200);
   assert.ok(bulk.body.data.applied.length >= engineers.length);
-  assert.ok(bulk.body.data.skipped.some((s) => s.id === 'missing'));
+  assert.ok(bulk.body.data.skipped.some((s: any) => s.id === 'missing'));
 });
 
 test('roles are enforced', async () => {
@@ -249,7 +262,7 @@ test('invites: create, list, resend, revoke', async () => {
   const r = await c.post('/invites', { name: 'Ivy Invite', email: 'ivy@ordinal.io', role: 'Read-only', team: 'Security' });
   assert.equal(r.status, 201, JSON.stringify(r.body));
   const id = r.body.data.invite._id;
-  assert.ok((await c.get('/invites')).body.data.some((i) => i._id === id));
+  assert.ok((await c.get('/invites')).body.data.some((i: any) => i._id === id));
   assert.equal((await c.post('/invites/' + id + '/resend')).status, 200);
   const pending = (await c.get('/invites?q=ivy')).body.data;
   assert.equal(pending.length, 1);
@@ -263,9 +276,9 @@ test('bids: list, filters, summary, create, update, stage, tasks, notes, archive
   assert.equal(list.body.meta.total, 6);
   assert.ok(list.body.data[0].reference.startsWith('BID-'));
 
-  assert.ok((await c.get('/bids?stage=Won')).body.data.every((b) => b.stage === 'Won'));
-  assert.ok((await c.get('/bids?due=7d')).body.data.some((b) => b.reference === 'BID-2418'));
-  assert.ok((await c.get('/bids?due=closed')).body.data.every((b) => ['Won', 'Lost'].includes(b.stage)));
+  assert.ok((await c.get('/bids?stage=Won')).body.data.every((b: any) => b.stage === 'Won'));
+  assert.ok((await c.get('/bids?due=7d')).body.data.some((b: any) => b.reference === 'BID-2418'));
+  assert.ok((await c.get('/bids?due=closed')).body.data.every((b: any) => ['Won', 'Lost'].includes(b.stage)));
   const paged = await c.get('/bids?limit=2&page=2&sort=value');
   assert.equal(paged.body.meta.pages, 3);
   assert.equal(paged.body.data.length, 2);
@@ -325,7 +338,7 @@ test('subscription: state, change plan, seat rules, checkout/portal, invoices', 
 
   assert.equal((await c.post('/subscription/checkout-session', { plan: 'team', cycle: 'annual', seats: 20 })).body.data.url, null);
   assert.equal((await c.post('/subscription/portal-session')).body.data.url, null);
-  assert.equal((await c.get('/subscription/invoices')).body.data.length, 3);
+  assert.equal((await c.get('/subscription/invoices')).body.data.length, 4);
 });
 
 test('assistant: suggestions and grounded local answers', async () => {
@@ -344,22 +357,24 @@ test('data is persisted in MongoDB with real types, indexes and DB-side sorting'
 
   // Stored documents use ObjectIds and Dates, and never expose hashes through the API.
   const avery = await db.users.findOne({ email: 'a.mercer@ordinal.io' });
+  assert.ok(avery);
   assert.ok(avery._id instanceof ObjectId);
   assert.ok(avery.workspaceId instanceof ObjectId);
   assert.ok(avery.createdAt instanceof Date);
-  assert.ok(avery.passwordHash.startsWith('$2'));
+  assert.ok(avery.passwordHash?.startsWith('$2'));
 
   const created = await c.post('/bids', { title: 'Persisted bid', client: 'Mongo Council', due: '2031-03-01' });
   const stored = await db.bids.findOne({ _id: new ObjectId(created.body.data._id) });
+  assert.ok(stored);
   assert.equal(stored.title, 'Persisted bid');
   assert.ok(stored.dueAt instanceof Date);
   assert.equal(stored.workspaceId.toString(), avery.workspaceId.toString());
 
   // Unique index on (workspaceId, reference).
-  await assert.rejects(db.bids.insertOne({ workspaceId: avery.workspaceId, reference: stored.reference }), (e) => e.code === 11000);
+  await assert.rejects(db.bids.insertOne({ ...stored, _id: new ObjectId() }), (e: any) => e.code === 11000);
 
   // Role sort comes from MongoDB via the stored roleRank: Owners first, Read-only last.
-  const byRole = (await c.get('/users?sort=role&limit=100')).body.data.map((u) => u.role);
+  const byRole = (await c.get('/users?sort=role&limit=100')).body.data.map((u: any) => u.role);
   assert.equal(byRole[0], 'Owner');
   assert.equal(byRole.at(-1), 'Read-only');
 
@@ -369,7 +384,7 @@ test('data is persisted in MongoDB with real types, indexes and DB-side sorting'
   assert.equal(byDue.at(-1).title, 'No due date yet');
 
   // Refresh tokens are stored hashed, never in plain text.
-  const tokens = await db.refreshTokens.find({ userId: avery._id }).toArray();
+  const tokens = await db.sessions.find({ userId: avery!._id }).toArray();
   assert.ok(tokens.length >= 1);
   assert.ok(tokens.every((t) => /^[a-f0-9]{64}$/.test(t.hash) && t.expiresAt instanceof Date));
 });
@@ -386,4 +401,126 @@ test('API answers 503 with a clear message while MongoDB is unreachable', async 
   } finally {
     await connect(uri, dbName);
   }
+});
+
+test('overview: KPIs, 30-day sign-ins chart, roles and recent events come from MongoDB', async () => {
+  const c = await owner();
+  const r = await c.get('/overview');
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  const o = r.body.data;
+
+  assert.equal(o.tiles.totalUsers, 13);
+  assert.ok(o.tiles.active7d > 0 && o.tiles.active7d <= o.tiles.totalUsers);
+  assert.equal(o.tiles.pendingInvites, 2);
+  assert.equal(o.tiles.expiringInvites48h, 1);
+  assert.ok(o.tiles.mfaCoverage > 0 && o.tiles.mfaCoverage <= 100);
+  assert.equal(o.tiles.mfaMissing, 2);
+
+  assert.equal(o.signIns.length, 30);
+  // Seeded sign-ins (3,836 over 30 days) plus the logins made by this test run.
+  const total = o.signIns.reduce((s: number, d: any) => s + d.count, 0);
+  assert.ok(total >= 3836, 'sign-ins total ' + total);
+  assert.match(o.signIns[0].date, /^\d{4}-\d{2}-\d{2}$/);
+
+  assert.deepEqual(o.roles.map((x: any) => x.role), ['Owner', 'Admin', 'Engineer', 'Read-only']);
+  assert.ok(o.events.length > 0);
+  assert.ok(o.events.every((e: any) => e.kind !== 'signin'), 'sign-ins are kept out of the events list');
+});
+
+test('admin actions are recorded in the audit log and show up as user activity', async () => {
+  const c = await owner();
+  const target = (await c.get('/users?q=ashworth')).body.data[0];
+  await c.post(`/users/${target._id}/reset-password`);
+  await c.patch(`/users/${target._id}/role`, { role: 'Admin' });
+
+  const events = (await c.get('/overview?events=5')).body.data.events;
+  assert.match(events[0].text, /Changed role for d\.ashworth@ordinal\.io from Engineer to Admin/);
+  assert.equal(events[0].actor, 'Avery Mercer');
+  assert.equal(events[0].kind, 'role');
+  assert.match(events[1].text, /Sent password reset to d\.ashworth@ordinal\.io/);
+
+  const activity = (await c.get(`/users/${target._id}/activity`)).body.data;
+  assert.ok(activity.some((e: any) => /from Engineer to Admin/.test(e.text)));
+
+  // The owner's own feed includes their seeded history and today's sign-in.
+  const me = (await c.get('/auth/me')).body.data.user;
+  const mine = (await c.get(`/users/${me.id}/activity?limit=50`)).body.data;
+  assert.ok(mine.some((e: any) => /Enrolled a new WebAuthn security key/.test(e.text)));
+  assert.ok(mine.some((e: any) => /^Signed in from /.test(e.text)));
+});
+
+test('profile: read, update, notification preferences, password reset link', async () => {
+  const c = await owner();
+  const p = (await c.get('/auth/profile')).body.data;
+  assert.equal(p.name, 'Avery Mercer');
+  assert.equal(p.jobTitle, 'Head of Platform Engineering');
+  assert.equal(p.security.mfaMethod, 'WebAuthn + TOTP');
+  assert.equal(p.security.recoveryCodesLeft, 8);
+  assert.equal(p.notifications.length, 4);
+
+  const saved = await c.patch('/auth/profile', { jobTitle: 'CTO', timezone: 'Asia/Kolkata' });
+  assert.equal(saved.status, 200, JSON.stringify(saved.body));
+  assert.equal(saved.body.data.jobTitle, 'CTO');
+  assert.equal(saved.body.data.timezone, 'Asia/Kolkata');
+  assert.equal((await c.patch('/auth/profile', { timezone: 'Mars/Olympus' })).status, 400);
+  assert.equal((await c.patch('/auth/profile', { email: 'n.beshara@ordinal.io' })).status, 409);
+
+  const toggled = await c.patch('/auth/profile/notifications', { key: 'productNews', on: true });
+  assert.equal(toggled.body.data.notifications.find((n: any) => n.key === 'productNews').on, true);
+  assert.equal((await c.get('/auth/profile')).body.data.notifications.find((n: any) => n.key === 'productNews').on, true);
+
+  assert.equal((await c.post('/auth/profile/password-reset')).status, 200);
+});
+
+test('sessions: each login is a device session; sign out others; revoke one', async () => {
+  const phone = client();
+  await phone.raw('POST', '/auth/login', { email: 'a.mercer@ordinal.io', password: DEMO_PASSWORD }, {
+    'user-agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1'
+  });
+  const laptop = client();
+  await laptop.raw('POST', '/auth/login', { email: 'a.mercer@ordinal.io', password: DEMO_PASSWORD }, {
+    'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36'
+  });
+
+  const list = (await laptop.get('/auth/sessions')).body.data;
+  const current = list.filter((s: any) => s.current);
+  assert.equal(current.length, 1);
+  assert.equal(current[0].device, 'Chrome 129 · macOS');
+  assert.ok(list.some((s: any) => s.device === 'Safari 18 · iPhone'));
+  assert.ok(list.some((s: any) => s.location === 'Exeter, UK'), 'seeded devices are listed too');
+
+  // Refresh keeps the same session (device) while rotating its token.
+  const before = list.length;
+  await laptop.post('/auth/refresh');
+  assert.equal((await laptop.get('/auth/sessions')).body.data.length, before);
+
+  const signedOut = await laptop.del('/auth/sessions/others');
+  assert.ok(signedOut.body.data.signedOut >= 2);
+  assert.equal((await laptop.get('/auth/sessions')).body.data.length, 1);
+  assert.equal((await phone.post('/auth/refresh')).status, 401, 'the phone was signed out');
+
+  const mine = (await laptop.get('/auth/sessions')).body.data[0];
+  assert.equal((await laptop.del('/auth/sessions/' + mine.id)).status, 200);
+  assert.equal((await laptop.post('/auth/refresh')).status, 401);
+});
+
+test('subscription: billing details, usage meters and AI query metering', async () => {
+  const c = await owner();
+  const s = (await c.get('/subscription')).body.data;
+  assert.equal(s.billing.cardLabel, 'Visa ending 4417');
+  assert.equal(s.billing.vatNumber, 'GB 418 2290 71');
+  assert.deepEqual(s.usage.map((u: any) => u.label), ['Licensed seats', 'SCIM sync runs', 'Audit log retention', 'AI assistant queries']);
+  const ai = s.usage.find((u: any) => u.label === 'AI assistant queries').used;
+
+  await c.post('/assistant/chat', { messages: [{ role: 'user', content: 'Who has MFA off?' }] });
+  const after = (await c.get('/subscription')).body.data.usage.find((u: any) => u.label === 'AI assistant queries').used;
+  assert.equal(after, ai + 1);
+
+  const saved = await c.patch('/subscription/billing', { address: '1 New Street, London', vatNumber: 'GB 000 0000 00' });
+  assert.equal(saved.status, 200, JSON.stringify(saved.body));
+  assert.equal(saved.body.data.billing.address, '1 New Street, London');
+
+  const invoices = (await c.get('/subscription/invoices')).body.data;
+  assert.equal(invoices[0].id, 'INV-2026-0142');
+  assert.equal(invoices[0].seats, 260);
 });

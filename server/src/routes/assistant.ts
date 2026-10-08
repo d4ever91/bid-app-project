@@ -3,25 +3,34 @@
  *
  * With ANTHROPIC_API_KEY set, chat goes to Claude with the workspace roster and pipeline as
  * context. Without it, the server answers the common audit questions from live data so the
- * screen still works offline. The key never reaches the browser.
+ * screen still works offline. The key never reaches the browser. Every question counts
+ * towards the plan's "AI assistant queries" usage meter.
  */
-import { Router } from 'express';
+import { Router, type Request } from 'express';
 import { config } from '../config.js';
 import { db } from '../db.js';
-import { HttpError, badRequest, ok } from '../http.js';
-import { requireAuth } from '../auth.js';
+import { HttpError, badRequest, bodyOf, ok } from '../http.js';
+import { ctx, requireAuth } from '../auth.js';
+import { currentUsage } from './subscription.js';
+import type { BidDoc, UserDoc, WorkspaceDoc } from '../types.js';
 
 const router = Router();
 router.use(requireAuth);
 
-const DAY = 864e5;
-const ms = (d) => new Date(d).getTime();
-const daysSince = (d) => (d ? Math.round((Date.now() - ms(d)) / DAY) : null);
-const daysUntil = (d) => (d ? Math.round((ms(d) - Date.now()) / DAY) : null);
-const money = (v) => '£' + Math.round(v).toLocaleString('en-GB');
-const list = (items) => items.join(', ');
+type Message = { role: 'user' | 'assistant'; content: string };
+interface Context {
+  users: UserDoc[];
+  bids: BidDoc[];
+}
 
-async function context(workspace) {
+const DAY = 864e5;
+const ms = (d: Date | string | number) => new Date(d).getTime();
+const daysSince = (d: Date | null) => (d ? Math.round((Date.now() - ms(d)) / DAY) : null);
+const daysUntil = (d: Date | null) => (d ? Math.round((ms(d) - Date.now()) / DAY) : null);
+const money = (v: number) => '£' + Math.round(v).toLocaleString('en-GB');
+const list = (items: string[]) => items.join(', ');
+
+async function context(workspace: WorkspaceDoc): Promise<Context> {
   const [users, bids] = await Promise.all([
     db.users.find({ workspaceId: workspace._id, deletedAt: null }, { projection: { passwordHash: 0 } }).toArray(),
     db.bids.find({ workspaceId: workspace._id, deletedAt: null }).toArray()
@@ -29,8 +38,8 @@ async function context(workspace) {
   return { users, bids };
 }
 
-function rosterText(users) {
-  return users
+const rosterText = (users: UserDoc[]) =>
+  users
     .map((u) =>
       [
         u.name, u.email, u.role, u.team, u.status,
@@ -40,21 +49,22 @@ function rosterText(users) {
       ].join(' | ')
     )
     .join('\n');
-}
 
-function pipelineText(bids) {
-  return bids
+const pipelineText = (bids: BidDoc[]) =>
+  bids
     .map((b) =>
-      [b.reference, b.title, b.client, b.stage, money(b.value ?? 0), (b.probability ?? 0) + '%', 'owner: ' + (b.ownerName ?? '—'),
-        'due: ' + (b.dueAt ? daysUntil(b.dueAt) + ' days' : 'TBC')].join(' | ')
+      [
+        b.reference, b.title, b.client, b.stage, money(b.value ?? 0), (b.probability ?? 0) + '%', 'owner: ' + (b.ownerName ?? '—'),
+        'due: ' + (b.dueAt ? daysUntil(b.dueAt) + ' days' : 'TBC')
+      ].join(' | ')
     )
     .join('\n');
-}
 
-function systemPrompt(req) {
+function systemPrompt(req: Request): string {
+  const { user, workspace } = ctx(req);
   return [
-    `You are Ordy, the operations assistant inside the ${req.workspace.name} console.`,
-    `The signed-in user is ${req.user.name} (${req.user.role}).`,
+    `You are Ordy, the operations assistant inside the ${workspace.name} console.`,
+    `The signed-in user is ${user.name} (${user.role}).`,
     'You help admins audit access and manage the bid pipeline.',
     'Roles, most to least privileged: Owner, Admin, Engineer, Read-only.',
     'Never invent accounts, bids or numbers — only use the data below.',
@@ -64,42 +74,47 @@ function systemPrompt(req) {
 }
 
 /** Deterministic answers for the common questions — used when no model key is configured. */
-function answerLocally(question, { users, bids }) {
-  const q = question.toLowerCase();
+export function answerLocally(question: string, { users, bids }: Context): string {
+  const text = question.toLowerCase();
 
-  if (q.includes('mfa')) {
+  if (text.includes('mfa')) {
     const gaps = users.filter((u) => !u.mfaEnrolledAt && u.status !== 'Invited');
     const pending = users.filter((u) => u.status === 'Invited');
     if (!gaps.length && !pending.length) return 'Every account is enrolled in MFA.';
     return [
       gaps.length ? `${gaps.length} account(s) without MFA: ${list(gaps.map((u) => `${u.name} (${u.role}, ${u.team})`))}.` : '',
       pending.length ? `${pending.length} invited account(s) still to enrol: ${list(pending.map((u) => u.name))}.` : ''
-    ].join(' ').trim();
+    ]
+      .join(' ')
+      .trim();
   }
 
-  if (q.includes('password') || q.includes('stale')) {
+  if (text.includes('password') || text.includes('stale')) {
     const stale = users
       .filter((u) => (daysSince(u.passwordChangedAt) ?? 0) > 180)
-      .sort((a, b) => daysSince(b.passwordChangedAt) - daysSince(a.passwordChangedAt));
+      .sort((a, b) => (daysSince(b.passwordChangedAt) ?? 0) - (daysSince(a.passwordChangedAt) ?? 0));
     if (!stale.length) return 'No password is older than 180 days.';
     return `Stale credentials: ${list(stale.map((u) => `${u.name} — ${daysSince(u.passwordChangedAt)} days`))}. Send resets from each profile.`;
   }
 
-  if (q.includes('suspend')) {
+  if (text.includes('suspend')) {
     const suspended = users.filter((u) => u.status === 'Suspended');
     return suspended.length ? `Suspended: ${list(suspended.map((u) => `${u.name} (${u.team})`))}.` : 'No suspended accounts.';
   }
 
-  if (q.includes('owner') || q.includes('admin') || q.includes('privileg')) {
+  if (text.includes('owner') || text.includes('admin') || text.includes('privileg')) {
     const priv = users.filter((u) => u.role === 'Owner' || u.role === 'Admin');
     return `${priv.length} privileged account(s): ${list(priv.map((u) => `${u.name} (${u.role})`))}.`;
   }
 
-  if (q.includes('bid') || q.includes('pipeline') || q.includes('due') || q.includes('deadline')) {
-    const open = bids.filter((b) => !['Won', 'Lost'].includes(b.stage));
+  if (text.includes('bid') || text.includes('pipeline') || text.includes('due') || text.includes('deadline')) {
+    const open = bids.filter((b) => b.stage !== 'Won' && b.stage !== 'Lost');
     const soon = open
-      .filter((b) => b.stage !== 'Submitted' && daysUntil(b.dueAt) !== null && daysUntil(b.dueAt) >= 0 && daysUntil(b.dueAt) <= 7)
-      .sort((a, b) => ms(a.dueAt) - ms(b.dueAt));
+      .filter((b) => {
+        const left = daysUntil(b.dueAt);
+        return b.stage !== 'Submitted' && left !== null && left >= 0 && left <= 7;
+      })
+      .sort((a, b) => ms(a.dueAt ?? 0) - ms(b.dueAt ?? 0));
     const pipeline = open.reduce((s, b) => s + (b.value ?? 0), 0);
     return (
       `${open.length} open bid(s) worth ${money(pipeline)}.` +
@@ -113,29 +128,26 @@ function answerLocally(question, { users, bids }) {
   return `${users.length} accounts (${active} active) and ${bids.length} bids in this workspace. Ask about MFA gaps, stale passwords, suspended accounts, privileged roles or bids due soon.`;
 }
 
-async function askClaude(system, messages) {
+async function askClaude(system: string, messages: Message[]): Promise<string> {
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'x-api-key': config.anthropicApiKey,
-      'anthropic-version': '2023-06-01'
-    },
+    headers: { 'content-type': 'application/json', 'x-api-key': config.anthropicApiKey, 'anthropic-version': '2023-06-01' },
     body: JSON.stringify({ model: config.anthropicModel, max_tokens: 600, system, messages })
   });
-  const body = await res.json().catch(() => null);
+  const body = (await res.json().catch(() => null)) as { content?: Array<{ type: string; text?: string }>; error?: { message?: string } } | null;
   if (!res.ok) {
     console.error('[assistant] model error', res.status, body?.error?.message);
     throw new HttpError(502, 'ASSISTANT_UNAVAILABLE', 'The assistant is unavailable right now — try again shortly');
   }
-  return (body?.content ?? []).filter((c) => c.type === 'text').map((c) => c.text).join('').trim();
+  return (body?.content ?? []).filter((c) => c.type === 'text').map((c) => c.text ?? '').join('').trim();
 }
 
-function cleanMessages(raw) {
+function cleanMessages(raw: unknown): Message[] {
   if (!Array.isArray(raw) || !raw.length) throw badRequest('Send at least one message');
-  const messages = raw
+  const messages: Message[] = raw
     .slice(-20)
-    .map((m) => ({ role: m?.role === 'assistant' ? 'assistant' : 'user', content: String(m?.content ?? m?.text ?? '').slice(0, 4000) }))
+    .map((m) => bodyOf(m))
+    .map((m) => ({ role: m.role === 'assistant' ? ('assistant' as const) : ('user' as const), content: String(m.content ?? m.text ?? '').slice(0, 4000) }))
     .filter((m) => m.content.trim());
   // The model API requires the conversation to start with a user turn.
   while (messages.length && messages[0].role !== 'user') messages.shift();
@@ -143,13 +155,18 @@ function cleanMessages(raw) {
   return messages;
 }
 
-async function reply(req, rawMessages) {
+async function reply(req: Request, rawMessages: unknown): Promise<string> {
+  const { workspace } = ctx(req);
   const messages = cleanMessages(rawMessages);
-  const data = await context(req.workspace);
-  if (!config.anthropicApiKey) return answerLocally(messages[messages.length - 1].content, data);
+  const data = await context(workspace);
 
+  await currentUsage(workspace);
+  await db.workspaces.updateOne({ _id: workspace._id }, { $inc: { 'usage.aiQueries': 1 } });
+
+  const question = messages[messages.length - 1].content;
+  if (!config.anthropicApiKey) return answerLocally(question, data);
   const system = `${systemPrompt(req)}\n\nAccounts:\n${rosterText(data.users)}\n\nBids:\n${pipelineText(data.bids)}`;
-  return (await askClaude(system, messages)) || answerLocally(messages[messages.length - 1].content, data);
+  return (await askClaude(system, messages)) || answerLocally(question, data);
 }
 
 router.get('/suggestions', (_req, res) => {
@@ -162,12 +179,12 @@ router.get('/suggestions', (_req, res) => {
 });
 
 router.post('/chat', async (req, res) => {
-  ok(res, { reply: await reply(req, req.body?.messages) });
+  ok(res, { reply: await reply(req, bodyOf(req.body).messages) });
 });
 
 /** Older client transport (src/assistant.ts `ask`) — same answer, `{ text }` response. */
 router.post('/', async (req, res) => {
-  res.json({ text: await reply(req, req.body?.messages) });
+  res.json({ text: await reply(req, bodyOf(req.body).messages) });
 });
 
 export default router;

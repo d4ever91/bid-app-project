@@ -571,7 +571,7 @@
         {:else if screen === 'assistant'}
           <Assistant {users} />
         {:else if screen === 'profile'}
-          <Profile on:notify={(e) => notify(e.detail)} on:billing={() => (screen = 'billing')} />
+          <Profile on:notify={(e) => notify(e.detail)} on:billing={() => (screen = 'billing')} on:renamed={(e) => (meName = e.detail)} />
         {:else if screen === 'billing'}
           <Billing on:notify={(e) => notify(e.detail)} />
         {/if}

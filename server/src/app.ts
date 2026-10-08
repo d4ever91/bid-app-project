@@ -1,4 +1,4 @@
-import express from 'express';
+import express, { type NextFunction, type Request, type Response } from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import { config } from './config.js';
@@ -9,15 +9,17 @@ import userRoutes, { invites as inviteRoutes } from './routes/users.js';
 import bidRoutes from './routes/bids.js';
 import subscriptionRoutes from './routes/subscription.js';
 import assistantRoutes from './routes/assistant.js';
+import overviewRoutes from './routes/overview.js';
 
 const DB_DOWN_MESSAGE =
-  "The API can't reach MongoDB. Start MongoDB (e.g. `docker compose up -d mongo`) or check MONGODB_URI in server/.env.";
+  "The API can't reach MongoDB. Start MongoDB (e.g. `npm run db:up`) or check MONGODB_URI in server/.env.";
 
-const isMongoConnectivityError = (err) =>
-  err?.code === 'DB_NOT_CONNECTED' ||
-  /^Mongo(ServerSelection|Network|NotConnected|TopologyClosed)/.test(err?.name ?? '');
+const isMongoConnectivityError = (err: unknown): boolean => {
+  const e = err as { code?: unknown; name?: string } | null;
+  return e?.code === 'DB_NOT_CONNECTED' || /^Mongo(ServerSelection|Network|NotConnected|TopologyClosed)/.test(e?.name ?? '');
+};
 
-export function createApp() {
+export function createApp(): express.Express {
   const app = express();
   app.disable('x-powered-by');
   app.set('trust proxy', 'loopback');
@@ -48,11 +50,12 @@ export function createApp() {
   );
 
   // Everything below needs MongoDB. While it's unreachable, say so plainly instead of hanging.
-  api.use((req, res, next) => {
+  api.use((_req, res, next) => {
     if (isConnected()) return next();
     sendError(res, 503, 'DB_UNAVAILABLE', DB_DOWN_MESSAGE);
   });
   api.use('/auth', authRoutes);
+  api.use('/overview', overviewRoutes);
   api.use('/users', userRoutes);
   api.use('/invites', inviteRoutes);
   api.use('/bids', bidRoutes);
@@ -60,17 +63,17 @@ export function createApp() {
   api.use('/assistant', assistantRoutes);
   app.use('/api', api);
 
-  app.use((req, res) => {
+  app.use((req: Request, res: Response) => {
     sendError(res, 404, 'NOT_FOUND', `No route for ${req.method} ${req.originalUrl.split('?')[0]}`);
   });
 
-  // eslint-disable-next-line no-unused-vars
-  app.use((err, req, res, _next) => {
+  app.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
     if (err instanceof HttpError) return sendError(res, err.status, err.code, err.message, err.fields);
-    if (err?.type === 'entity.parse.failed') return sendError(res, 400, 'BAD_JSON', 'Request body is not valid JSON');
-    if (err?.type === 'entity.too.large') return sendError(res, 413, 'TOO_LARGE', 'Request body is too large');
+    const type = (err as { type?: string } | null)?.type;
+    if (type === 'entity.parse.failed') return sendError(res, 400, 'BAD_JSON', 'Request body is not valid JSON');
+    if (type === 'entity.too.large') return sendError(res, 413, 'TOO_LARGE', 'Request body is too large');
     if (isMongoConnectivityError(err)) {
-      console.error(`[db] ${req.method} ${req.originalUrl}: ${err.message}`);
+      console.error(`[db] ${req.method} ${req.originalUrl}: ${(err as Error).message}`);
       return sendError(res, 503, 'DB_UNAVAILABLE', DB_DOWN_MESSAGE);
     }
     console.error(`[error] ${req.method} ${req.originalUrl}`, err);

@@ -2,7 +2,9 @@
   import { createEventDispatcher } from 'svelte';
   import { mono, label, panel, panelHead, field, btnDark, btnGhost } from '../ui';
   import { ACTIVITY, ROLES, ROLE_INFO, initials, statusDot, maskEmail, mfaColor } from '../data';
-  import type { Role, User } from '../types';
+  import { relative } from '../adapters';
+  import { fetchUserActivity, getAccessToken } from '../api';
+  import type { ActivityItem, Role, User } from '../types';
 
   export let user: User;
   export let maskEmails = false;
@@ -12,6 +14,18 @@
   const onRole = (e: Event): void => dispatch('changeRole', (e.currentTarget as HTMLSelectElement).value as Role);
 
   $: email = maskEmail(user.email, maskEmails);
+
+  /** Live activity from the audit log once signed in; the fixture list in demo mode. */
+  let activity: ActivityItem[] = ACTIVITY;
+  let loadedFor = '';
+  $: if (user.id !== loadedFor) void loadActivity(user.id);
+
+  async function loadActivity(id: string): Promise<void> {
+    loadedFor = id;
+    if (!getAccessToken()) return;
+    const rows = await fetchUserActivity(id).catch(() => null);
+    if (rows && loadedFor === id) activity = rows.map((e) => ({ time: relative(e.at), text: e.text }));
+  }
 
   $: fields = [
     ['Full name', user.name],
@@ -72,7 +86,10 @@
 
       <div style={panel}>
         <div style={panelHead}>Activity</div>
-        {#each ACTIVITY as a}
+        {#if !activity.length}
+          <div style="padding: 14px 18px; font-size: 13px; color: var(--muted);">No activity recorded yet.</div>
+        {/if}
+        {#each activity as a}
           <div style="display: grid; grid-template-columns: 96px 1fr; gap: 14px; padding: 11px 18px; border-bottom: 1px solid var(--hair); font-size: 13px;">
             <span style="{mono} font-size: 11.5px; color: var(--faint);">{a.time}</span>
             <span style="color: #4a5250;">{a.text}</span>

@@ -4,14 +4,15 @@ import { ensureSecret } from './auth.js';
 import { seed } from './seed.js';
 import { createApp } from './app.js';
 
-const redact = (uri) => uri.replace(/\/\/([^@/]+)@/, '//***@');
+const redact = (uri: string) => uri.replace(/\/\/([^@/]+)@/, '//***@');
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
  * The HTTP server starts straight away and keeps retrying MongoDB in the background, so a
  * database that starts a few seconds later (or restarts) doesn't take the API down. Until
  * it connects, requests get a 503 that explains what's wrong.
  */
-async function connectWithRetry() {
+async function connectWithRetry(): Promise<void> {
   for (let attempt = 1; ; attempt++) {
     try {
       await connect();
@@ -20,16 +21,16 @@ async function connectWithRetry() {
       if (config.seedOnStart && !isProd && (await db.workspaces.estimatedDocumentCount()) === 0) {
         console.log('[db] Empty database — seeding demo data.');
         const counts = await seed();
-        console.log(`[seed] ${counts.workspaces} workspaces, ${counts.users} users, ${counts.bids} bids, ${counts.invoices} invoices.`);
+        console.log(`[seed] ${Object.entries(counts).map(([k, v]) => `${v} ${k}`).join(', ')}.`);
       }
       return;
     } catch (err) {
       const wait = Math.min(30, 2 * attempt);
-      console.error(`[db] Can't reach MongoDB at ${redact(config.mongoUri)} (${err.message}). Retrying in ${wait}s…`);
+      console.error(`[db] Can't reach MongoDB at ${redact(config.mongoUri)} (${(err as Error).message}). Retrying in ${wait}s…`);
       if (attempt === 1) {
-        console.error('[db] Start it with `docker compose up -d mongo`, or set MONGODB_URI in server/.env (e.g. a MongoDB Atlas URI).');
+        console.error('[db] Start it with `npm run db:up`, or set MONGODB_URI in server/.env (e.g. a MongoDB Atlas URI).');
       }
-      await new Promise((r) => setTimeout(r, wait * 1000));
+      await sleep(wait * 1000);
     }
   }
 }

@@ -23,8 +23,24 @@ or create a new workspace from "Create a workspace".
 
 ## API server (`server/`)
 
-Express 5 API that implements every call in `src/api.ts`, storing everything in **MongoDB**
-through the official `mongodb` driver.
+Express 5 API written in **TypeScript** (strict mode) that implements every call in
+`src/api.ts`, storing all app data in **MongoDB** through the official `mongodb` driver.
+Every collection has a typed document interface (`server/src/types.ts`), so queries and
+updates are checked by the compiler.
+
+    server/src/
+      index.ts            start-up: HTTP server + MongoDB connect/retry + auto-seed
+      app.ts              Express app, CORS, routing, error envelope
+      db.ts               MongoDB connection, typed collections, indexes
+      types.ts            document interfaces for every collection
+      auth.ts             JWT + device sessions, role checks
+      audit.ts            audit log writer (sign-ins and admin actions)
+      routes/             auth, overview, users (+ invites), bids, subscription, assistant
+      seed.ts, seed-data.ts   all demo data
+
+Scripts (run from the repo root, or inside `server/` without the `api:` prefix):
+`npm run api` (dev, `tsx watch`), `npm run api:build` (compile to `server/dist`),
+`npm run api:start` (run the build), `npm run api:typecheck`, `npm run api:test`, `npm run api:seed`.
 
 **MongoDB setup.** Either run it locally with Docker (`npm run db:up`, uses
 `docker-compose.yml`), or point the API at any MongoDB — e.g. a free MongoDB Atlas cluster —
@@ -32,14 +48,33 @@ by setting `MONGODB_URI` in `server/.env` (copy `server/.env.example`). The defa
 `mongodb://127.0.0.1:27017/ordinal_bids`.
 
 **Seeding.** On start, if the database has no workspaces, the API seeds all the demo data:
-2 workspaces, 14 users, pending invites, 6 bids with tasks and notes, and 3 invoices.
-`npm run api:seed` wipes the app's collections and seeds again at any time.
+2 workspaces (with billing details and usage), 14 users (with profiles and notification
+preferences), pending invites, 6 bids with tasks and notes, 4 invoices, signed-in devices, and
+~3,850 audit events (the Overview's access events, user activity, and 30 days of sign-ins for the
+chart). `npm run api:seed` wipes the app's collections and seeds again at any time.
 
-**Collections:** `workspaces` (incl. the signup company answers), `users`, `invites`, `bids`
-(tasks and notes embedded), `invoices`, `refreshTokens` and `resetTokens` (hashed, TTL-indexed so
-expired ones are removed automatically), `settings`. Ids are ObjectIds and dates are real
-Dates; filtering, sorting and paging for the users and bids lists happen in MongoDB. Indexes are
-created on start (unique workspace domain, unique bid reference per workspace, token hashes).
+**Collections:**
+
+| Collection | Holds |
+| --- | --- |
+| `workspaces` | name, domain, signup company answers, plan, seats, billing details, metered usage |
+| `users` | account, role, status, profile (job title, timezone), notification preferences, MFA, password dates |
+| `invites` | pending/accepted invites (token hashed) |
+| `bids` | bid pipeline with embedded tasks and notes |
+| `invoices` | invoice history |
+| `sessions` | one per signed-in device: device, IP, last used; refresh-token hash rotates (TTL-indexed) |
+| `resetTokens` | password reset links (hashed, single use, TTL-indexed) |
+| `auditEvents` | append-only log of sign-ins and every admin action |
+| `settings` | generated dev JWT secret |
+
+Ids are ObjectIds and dates are real Dates; filtering, sorting and paging for the users and bids
+lists happen in MongoDB. Indexes are created on start.
+
+**What reads from MongoDB in the UI:** everything when signed in — Users, Bids, Overview (KPI
+tiles, sign-ins chart, role distribution, recent access events), user activity, Your profile
+(details, notifications, security, active sessions), Subscription (plan, seats, usage, card,
+billing details, invoices) and the assistant. The fixtures in `src/data.ts`,
+`src/subscription.ts` and `src/bids.ts` are only used by the offline demo mode.
 
 If MongoDB isn't reachable, the API keeps running and retries every few seconds; meanwhile
 requests get a 503 that says "The API can't reach MongoDB…", which the app shows on screen.
@@ -47,14 +82,19 @@ requests get a 503 that says "The API can't reach MongoDB…", which the app sho
 | Area | Endpoints |
 | --- | --- |
 | Auth | `POST /auth/signup` · `/auth/login` · `/auth/refresh` · `/auth/logout` · `/auth/accept-invite` · `/auth/reset-password` · `GET /auth/me` |
-| Users | `GET /users` (q, role, team, status, mfa, archived, sort, page, limit) · `/users/facets` · `/users/:id` · `POST /users` · `PATCH /users/:id` · `/:id/role` · `/:id/status` · `POST /users/:id/reset-password` · `/:id/restore` · `/users/bulk` · `DELETE /users/:id` · `/:id/purge` |
+| Profile & sessions | `GET /auth/profile` · `PATCH /auth/profile` · `PATCH /auth/profile/notifications` · `POST /auth/profile/password-reset` · `GET /auth/sessions` · `DELETE /auth/sessions/others` · `DELETE /auth/sessions/:id` |
+| Overview | `GET /overview` (KPIs, sign-ins per day, roles, recent events) |
+| Users | `GET /users` (q, role, team, status, mfa, archived, sort, page, limit) · `/users/facets` · `/users/:id` · `/users/:id/activity` · `POST /users` · `PATCH /users/:id` · `/:id/role` · `/:id/status` · `POST /users/:id/reset-password` · `/:id/restore` · `/users/bulk` · `DELETE /users/:id` · `/:id/purge` |
 | Invites | `GET /invites` · `POST /invites` · `POST /invites/:id/resend` · `DELETE /invites/:id` |
 | Bids | `GET /bids` (q, stage, owner, sector, due, archived, sort, page, limit) · `/bids/summary` · `/bids/:id` · `POST /bids` · `PATCH /bids/:id` · `/:id/stage` · `/:id/tasks` · `POST /bids/:id/notes` · `/:id/restore` · `DELETE /bids/:id` |
-| Subscription | `GET /subscription/plans` (public) · `GET /subscription` · `POST /subscription` · `/checkout-session` · `/portal-session` · `GET /subscription/invoices` |
+| Subscription | `GET /subscription/plans` (public) · `GET /subscription` · `POST /subscription` · `PATCH /subscription/billing` · `/checkout-session` · `/portal-session` · `GET /subscription/invoices` |
 | Assistant | `GET /assistant/suggestions` · `POST /assistant/chat` |
 
 - **Sessions:** 15-minute JWT access token in the response body; 30-day refresh token in an
-  httpOnly cookie (`path=/api/auth`) that rotates on every refresh. Only token hashes are stored.
+  httpOnly cookie (`path=/api/auth`) that rotates on every refresh. Each device is one session
+  (device name, IP, last used) you can see and sign out from Your profile. Only hashes are stored.
+- **Audit log:** sign-ins and every change (roles, status, invites, resets, archive/restore,
+  bids, plan/billing, profile) are written to `auditEvents`.
 - **Workspaces are isolated:** every query is scoped to the signed-in user's workspace.
 - **Roles:** Owner and Admin manage users and invites; only an Owner can grant or remove Owner
   or change billing; Read-only can't change bids; nobody can demote, suspend or archive
