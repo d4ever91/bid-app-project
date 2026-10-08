@@ -102,15 +102,16 @@ export function toBid(row: ApiBid): Bid {
     stage: row.stage as BidStage,
     owner: row.ownerName ?? '—',
     due: shortDate(row.dueAt),
-    daysLeft: daysBetween(row.dueAt),
+    // No deadline yet: keep it out of the "due soon" buckets (labels show "no deadline").
+    daysLeft: row.dueAt ? daysBetween(row.dueAt) : 9999,
     probability: row.probability ?? 0,
     incumbent: row.incumbent ?? '—',
-    submittedOn: source.submittedOn ? shortDate(source.submittedOn) : undefined,
+    submittedOn: source.submittedOn ? shortDate(source.submittedOn) : '—',
     tasks: (source.tasks ?? []).map((t) => ({ label: t.label, owner: t.owner ?? '—', done: t.done })),
-    notes: (source.notes ?? []).map((n) => ({
-      text: n.text,
-      author: n.author ?? 'System',
-      at: relative(n.at)
+    // The bid log renders { time, text } (same shape as the fixtures).
+    notes: ((row as unknown as { notes?: Array<{ text: string; author?: string | null; at?: string | null }> }).notes ?? []).map((n) => ({
+      time: relative(n.at),
+      text: n.author && n.author !== 'System' && n.author !== 'AI summary' ? n.text + ' — ' + n.author : n.text
     }))
   };
 }

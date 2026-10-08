@@ -7,7 +7,8 @@
 import { MongoClient, ObjectId, type Collection, type Db, type Document } from 'mongodb';
 import { config } from './config.js';
 import type {
-  AuditEventDoc, BidDoc, InviteDoc, InvoiceDoc, ResetTokenDoc, SessionDoc, SettingDoc, UserDoc, WorkspaceDoc
+  AuditEventDoc, AutomationSettingsDoc, BidDoc, InviteDoc, InvoiceDoc, MailItemDoc, ResetTokenDoc, SessionDoc, SettingDoc,
+  UserDoc, WorkspaceDoc
 } from './types.js';
 
 interface Collections {
@@ -20,10 +21,13 @@ interface Collections {
   resetTokens: Collection<ResetTokenDoc>;
   auditEvents: Collection<AuditEventDoc>;
   settings: Collection<SettingDoc>;
+  automationSettings: Collection<AutomationSettingsDoc>;
+  mailItems: Collection<MailItemDoc>;
 }
 
 export const COLLECTIONS: Array<keyof Collections> = [
-  'workspaces', 'users', 'invites', 'bids', 'invoices', 'sessions', 'resetTokens', 'auditEvents', 'settings'
+  'workspaces', 'users', 'invites', 'bids', 'invoices', 'sessions', 'resetTokens', 'auditEvents', 'settings',
+  'automationSettings', 'mailItems'
 ];
 
 let client: MongoClient | null = null;
@@ -97,6 +101,9 @@ async function ensureIndexes(): Promise<void> {
   await db.auditEvents.createIndex({ workspaceId: 1, at: -1 }, { name: 'workspace_recent' });
   await db.auditEvents.createIndex({ workspaceId: 1, kind: 1, at: -1 }, { name: 'workspace_kind_recent' });
   await db.auditEvents.createIndex({ userId: 1, at: -1 }, { name: 'user_recent' });
+  await db.automationSettings.createIndex({ workspaceId: 1 }, { unique: true, name: 'workspace_unique' });
+  await db.mailItems.createIndex({ workspaceId: 1, messageId: 1 }, { unique: true, name: 'workspace_message_unique' });
+  await db.mailItems.createIndex({ workspaceId: 1, status: 1, receivedAt: -1 }, { name: 'workspace_status_recent' });
 }
 
 /** Parses an id from a URL/body. Returns null for anything that isn't a valid ObjectId. */

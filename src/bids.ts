@@ -159,15 +159,18 @@ export const BIDS: Bid[] = [
 export const money = (v: number): string =>
   v >= 1000000 ? '£' + (v / 1000000).toFixed(2) + 'm' : '£' + Math.round(v / 1000) + 'k';
 
+const noDeadline = (b: Bid): boolean => !b.due || b.due === '—' || b.due === 'TBC';
+
 export const dueLabel = (b: Bid): string => {
-  if (b.stage === 'Won' || b.stage === 'Lost') return b.submittedOn;
+  if (b.stage === 'Won' || b.stage === 'Lost') return b.submittedOn || '—';
+  if (noDeadline(b)) return 'no deadline';
   if (b.daysLeft < 0) return 'submitted';
   if (b.daysLeft === 0) return 'today';
   return b.daysLeft + 'd left';
 };
 
 export const dueColor = (b: Bid): string => {
-  if (b.stage === 'Won' || b.stage === 'Lost' || b.daysLeft < 0) return 'var(--muted)';
+  if (b.stage === 'Won' || b.stage === 'Lost' || b.daysLeft < 0 || noDeadline(b)) return 'var(--muted)';
   if (b.daysLeft <= 5) return '#b23a3a';
   if (b.daysLeft <= 14) return '#8a5a10';
   return 'var(--muted)';

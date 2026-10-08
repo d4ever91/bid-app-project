@@ -44,7 +44,11 @@ const dueWithin = (days: number) => ({ $gte: new Date(Date.now() - DAY / 2), $lt
 
 async function nextReference(req: Request): Promise<string> {
   const refs = await db.bids.find({ workspaceId: ctx(req).workspace._id }, { projection: { reference: 1 } }).toArray();
-  const numbers = refs.map((b) => Number.parseInt(String(b.reference).replace(/\D/g, ''), 10)).filter(Number.isFinite);
+  // Only our own BID-#### references count — a client's "RBC-2026-114" must not skew numbering.
+  const numbers = refs
+    .map((b) => /^BID-(\d{1,7})$/.exec(String(b.reference))?.[1])
+    .filter((n): n is string => !!n)
+    .map(Number);
   return 'BID-' + (numbers.length ? Math.max(...numbers) + 1 : 1001);
 }
 

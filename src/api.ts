@@ -560,6 +560,144 @@ export const fetchSessions = async (): Promise<DeviceSession[]> => (await get<De
 export const signOutOtherSessions = async (): Promise<string | null> =>
   (await del<{ signedOut: number }>('/auth/sessions/others')).message;
 
+/* ---------------- bid automation (email → AI → bid) ---------------- */
+
+export type AiProvider = 'openai' | 'gemini';
+export type MailStatus = 'bid_created' | 'needs_review' | 'not_a_bid' | 'ignored' | 'failed';
+
+export interface ProviderSettings {
+  hasKey: boolean;
+  keyHint: string | null;
+  model: string;
+  suggestions: string[];
+}
+
+export interface AutomationSettings {
+  enabled: boolean;
+  provider: AiProvider;
+  openai: ProviderSettings;
+  gemini: ProviderSettings;
+  mailbox: {
+    host: string;
+    port: number;
+    secure: boolean;
+    user: string;
+    hasPassword: boolean;
+    folder: string;
+    lastCheckedAt: string | null;
+    lastError: string | null;
+  };
+  autoCreateThreshold: number;
+  pollMinutes: number;
+  readAttachments: boolean;
+  ready: { ai: boolean; mailbox: boolean; polling: boolean };
+}
+
+/** Secrets are write-only: send a value to set, "" to remove, leave out to keep. */
+export interface AutomationSettingsPatch {
+  enabled?: boolean;
+  provider?: AiProvider;
+  openai?: { apiKey?: string; model?: string };
+  gemini?: { apiKey?: string; model?: string };
+  mailbox?: { user?: string; password?: string; folder?: string; host?: string; port?: number; secure?: boolean };
+  autoCreateThreshold?: number;
+  pollMinutes?: number;
+  readAttachments?: boolean;
+}
+
+export interface MailItem {
+  id: string;
+  source: 'imap' | 'manual';
+  from: string;
+  fromName: string | null;
+  subject: string;
+  receivedAt: string;
+  preview: string;
+  text: string;
+  attachments: Array<{ filename: string; contentType: string; size: number; sentToAi: boolean }>;
+  status: MailStatus;
+  ai: {
+    provider: AiProvider;
+    model: string;
+    ms: number;
+    isBid: boolean;
+    confidence: number;
+    reason: string;
+    title: string | null;
+    client: string | null;
+    reference: string | null;
+    sector: string | null;
+    value: number | null;
+    currency: string | null;
+    dueDate: string | null;
+    contactName: string | null;
+    contactEmail: string | null;
+    incumbent: string | null;
+    summary: string | null;
+    requirements: string[];
+  } | null;
+  error: string | null;
+  bidId: string | null;
+  processedAt: string;
+}
+
+export interface PollSummary {
+  checked: number;
+  created: number;
+  review: number;
+  notBid: number;
+  failed: number;
+  skipped: number;
+  more: boolean;
+}
+
+export const fetchAutomationSettings = async (): Promise<AutomationSettings> =>
+  (await get<AutomationSettings>('/automation/settings')).data;
+
+export const saveAutomationSettings = async (patchBody: AutomationSettingsPatch): Promise<{ settings: AutomationSettings; message: string | null }> => {
+  const body = await request<AutomationSettings>('/automation/settings', { method: 'PUT', body: JSON.stringify(patchBody) });
+  return { settings: body.data, message: body.message };
+};
+
+export const testAiProvider = async (provider: AiProvider, apiKey?: string, model?: string): Promise<string | null> =>
+  (await post<unknown>('/automation/test-ai', { provider, apiKey: apiKey || undefined, model: model || undefined })).message;
+
+export const testMailboxConnection = async (input: { user?: string; password?: string; folder?: string; host?: string; port?: number; secure?: boolean }): Promise<string | null> =>
+  (await post<unknown>('/automation/test-mailbox', input)).message;
+
+export const runAutomation = async (): Promise<{ summary: PollSummary; message: string | null }> => {
+  const body = await post<PollSummary>('/automation/run');
+  return { summary: body.data, message: body.message };
+};
+
+export const ingestEmail = async (input: { from?: string; subject?: string; text?: string; raw?: string }): Promise<{ item: MailItem; message: string | null }> => {
+  const body = await post<{ item: MailItem; bid: ApiBid | null }>('/automation/ingest', input);
+  return { item: body.data.item, message: body.message };
+};
+
+export const fetchInbox = async (
+  status: MailStatus | 'all' = 'all',
+  page = 1
+): Promise<Page<MailItem> & { counts: Record<MailStatus, number> }> => {
+  const body = await get<MailItem[]>('/automation/inbox' + qs({ status, page, limit: 50 }));
+  return { ...asPage(body), counts: (body.meta?.counts ?? {}) as Record<MailStatus, number> };
+};
+
+export const createBidFromEmail = async (
+  id: string,
+  overrides: { title?: string; client?: string; reference?: string; sector?: string; value?: number; dueDate?: string }
+): Promise<{ bid: ApiBid; item: MailItem; message: string | null }> => {
+  const body = await post<{ bid: ApiBid; item: MailItem }>('/automation/inbox/' + id + '/create-bid', overrides);
+  return { ...body.data, message: body.message };
+};
+
+export const ignoreEmail = async (id: string): Promise<MailItem> => (await post<MailItem>('/automation/inbox/' + id + '/ignore')).data;
+
+export const reprocessEmail = async (id: string): Promise<{ item: MailItem; message: string | null }> => {
+  const body = await post<{ item: MailItem }>('/automation/inbox/' + id + '/reprocess');
+  return { item: body.data.item, message: body.message };
+};
+
 /** Exchanges the refresh cookie for a new access token. Returns false when there's no session. */
 export async function refresh(): Promise<boolean> {
   try {

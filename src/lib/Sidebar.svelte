@@ -8,6 +8,7 @@
   export let totalUsers = 0;
   export let openBids = 0;
   export let planName = '';
+  export let inboxCount = 0;
   export let collapsed = false;
   export let meName = 'Avery Mercer';
   export let meInitials = 'AM';
@@ -37,6 +38,7 @@
     { key: 'overview', icon: ICONS.overview, label: 'Overview', badge: '', active: screen === 'overview' },
     { key: 'users', icon: ICONS.users, label: 'Users', badge: String(totalUsers), active: screen === 'users' || screen === 'detail' || screen === 'invite' },
     { key: 'bids', icon: ICONS.bids, label: 'Bids', badge: String(openBids), active: screen === 'bids' || screen === 'bid' || screen === 'newbid' },
+    { key: 'automation', icon: ICONS.inbox, label: 'Bid inbox', badge: inboxCount ? String(inboxCount) : '', active: screen === 'automation' },
     { key: 'assistant', icon: ICONS.assistant, label: 'AI assistant', badge: '', active: screen === 'assistant' }
   ] as NavItem[];
 

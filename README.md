@@ -289,6 +289,51 @@ On the Subscription screen, plan changes call `POST /subscription` when a sessio
 (and fall back to the fixture behaviour in demo mode), "Pay now" opens Checkout, and
 "Update card" opens the Stripe billing portal.
 
+## Bid automation: emails → AI → bids
+
+**Bid inbox** (sidebar) watches a Gmail mailbox, has OpenAI or Gemini read each new email, and
+turns bid opportunities into bids automatically.
+
+**Set up (Bid inbox → Settings, Owner/Admin only):**
+
+1. **AI provider** — choose OpenAI or Gemini and paste an API key
+   ([OpenAI keys](https://platform.openai.com/api-keys) · [Gemini keys](https://aistudio.google.com/apikey)).
+   Pick a model (defaults: `gpt-6-luna`, `gemini-3.5-flash`) and press **Test**.
+2. **Gmail** — enter the address and a Google **app password** (not the normal password):
+   turn on 2-Step Verification, create one at <https://myaccount.google.com/apppasswords>, and
+   make sure IMAP is on (Gmail → Settings → Forwarding and POP/IMAP). Optionally point it at a
+   label such as `Tenders` that a Gmail filter fills. Press **Test connection**.
+3. **Rules** — the confidence at which bids are created automatically (default 75%), how often to
+   check (default every 5 minutes), and whether the AI may read PDF attachments.
+4. Save, then switch on **Automatic checking**. **Check mailbox now** runs it immediately.
+
+**What happens to each email:**
+
+| Outcome | When |
+| --- | --- |
+| Bid created | The AI says it's an opportunity and is at least as confident as the threshold. The bid starts in Qualifying with client, value, deadline, contact and incumbent filled in, the extracted requirements as checklist tasks, and the AI summary in the bid log. |
+| To review | Looks like an opportunity but the AI is less sure. Edit the fields and press **Create bid**, or **Dismiss**. |
+| Not a bid | Newsletters, invoices, internal mail, award notices… |
+| Failed | The AI call failed (e.g. key removed) — fix it and press **Read again**. |
+
+Details:
+
+- The mailbox is opened **read-only**: nothing is marked as read, moved or deleted. Each email is
+  read once (tracked by IMAP UID and Message-ID); the first check looks back 7 days.
+- PDF attachments (tender packs, up to 3 × 8 MB) are sent to the model; if a model can't take
+  files, the email text is used instead.
+- **Paste an email** runs any email (text, or the full source from Gmail's "Show original")
+  through the same pipeline — handy for testing or for emails from other inboxes.
+- API keys and the app password are **encrypted** (AES-256-GCM) before they're stored in
+  MongoDB and are never sent back to the browser — Settings only shows a hint like `sk-…a1b2`.
+  Set `SECRETS_KEY` in `server/.env` (32 random bytes, e.g. `openssl rand -hex 32`); it's
+  required in production. Changing it means re-entering the keys.
+- Every automated action is in the audit log (Overview → Recent access events).
+- Usage is billed by your AI provider; roughly one small request per email.
+
+API: `GET/PUT /automation/settings` · `POST /automation/test-ai` · `/test-mailbox` · `/run` ·
+`/ingest` · `GET /automation/inbox` · `POST /automation/inbox/:id/create-bid` · `/ignore` · `/reprocess`.
+
 ## Talking to the API
 
 `src/api.ts` is the only place that knows the server's response envelope. It holds the

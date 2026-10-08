@@ -187,7 +187,7 @@ export interface ResetTokenDoc {
   usedAt: Date | null;
 }
 
-export const AUDIT_KINDS = ['signin', 'auth', 'role', 'status', 'invite', 'user', 'bid', 'billing', 'sync'] as const;
+export const AUDIT_KINDS = ['signin', 'auth', 'role', 'status', 'invite', 'user', 'bid', 'billing', 'sync', 'automation'] as const;
 export type AuditKind = (typeof AUDIT_KINDS)[number];
 
 /** Append-only audit log: powers Overview events, the sign-ins chart and user activity. */
@@ -208,4 +208,87 @@ export interface AuditEventDoc {
 export interface SettingDoc {
   _id: string;
   secret?: string;
+}
+
+/* ---------------- bid automation (email → AI → bid) ---------------- */
+
+export const AI_PROVIDERS = ['openai', 'gemini'] as const;
+export type AiProvider = (typeof AI_PROVIDERS)[number];
+
+/** Encrypted secret as stored (see secrets.ts) — never sent to the browser. */
+export type EncryptedSecret = string;
+
+export interface AutomationSettingsDoc {
+  _id: ObjectId;
+  workspaceId: ObjectId;
+  /** Master switch for polling the mailbox. Manual "paste an email" works regardless. */
+  enabled: boolean;
+  provider: AiProvider;
+  openai: { apiKey: EncryptedSecret | null; model: string };
+  gemini: { apiKey: EncryptedSecret | null; model: string };
+  mailbox: {
+    host: string;
+    port: number;
+    secure: boolean;
+    user: string;
+    password: EncryptedSecret | null;
+    folder: string;
+    /** Only emails received after this are read on the first run. */
+    since: Date | null;
+    /** Highest UID processed per folder+UIDVALIDITY, so each email is read once. */
+    lastUid: number;
+    uidValidity: string | null;
+    lastCheckedAt: Date | null;
+    lastError: string | null;
+  };
+  /** Confidence (0–1) at or above which a detected bid is created automatically. */
+  autoCreateThreshold: number;
+  pollMinutes: number;
+  /** Include PDF attachments (tender documents) in what the AI reads. */
+  readAttachments: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/** What the AI extracts from one email. */
+export interface BidExtraction {
+  isBid: boolean;
+  confidence: number;
+  reason: string;
+  title: string | null;
+  client: string | null;
+  reference: string | null;
+  sector: string | null;
+  value: number | null;
+  currency: string | null;
+  dueDate: string | null;
+  contactName: string | null;
+  contactEmail: string | null;
+  incumbent: string | null;
+  summary: string | null;
+  requirements: string[];
+}
+
+export const MAIL_STATUSES = ['bid_created', 'needs_review', 'not_a_bid', 'ignored', 'failed'] as const;
+export type MailStatus = (typeof MAIL_STATUSES)[number];
+
+/** One processed email, whatever the outcome — the "Bid inbox". */
+export interface MailItemDoc {
+  _id: ObjectId;
+  workspaceId: ObjectId;
+  /** RFC 5322 Message-ID (or a content hash) — each email is processed once. */
+  messageId: string;
+  source: 'imap' | 'manual';
+  from: string;
+  fromName: string | null;
+  subject: string;
+  receivedAt: Date;
+  text: string;
+  attachments: Array<{ filename: string; contentType: string; size: number; sentToAi: boolean }>;
+  status: MailStatus;
+  ai: { provider: AiProvider; model: string; extraction: BidExtraction; ms: number } | null;
+  error: string | null;
+  bidId: ObjectId | null;
+  processedAt: Date;
+  updatedAt: Date;
 }

@@ -10,6 +10,7 @@
   import UserDetail from './lib/UserDetail.svelte';
   import NewUser from './lib/NewUser.svelte';
   import Assistant from './lib/Assistant.svelte';
+  import Automation from './lib/Automation.svelte';
   import Bids from './lib/Bids.svelte';
   import BidDetail from './lib/BidDetail.svelte';
   import NewBid from './lib/NewBid.svelte';
@@ -22,7 +23,7 @@
     restoreSession, logout as apiLogout, getAccessToken, ApiError,
     fetchUsers, fetchUserFacets, createUser, updateUser, changeUserRole,
     resetUserPassword, archiveUser, bulkUsers,
-    fetchBids, changeBidStage, createBid,
+    fetchBids, fetchBid, fetchInbox, changeBidStage, createBid,
     type SessionUser, type BulkAction, type UserFacets
   } from './api';
   import { toUser, toBid, userQueryFrom, bidQueryFrom } from './adapters';
@@ -168,8 +169,26 @@
     facets = await fetchUserFacets().catch(() => null);
   };
 
+  /** Emails waiting for review in the bid inbox (sidebar badge). */
+  let inboxCount = 0;
+  const loadInboxCount = async (): Promise<void> => {
+    if (!live()) return;
+    const page = await fetchInbox('needs_review').catch(() => null);
+    if (page) inboxCount = page.counts.needs_review ?? 0;
+  };
+
+  /** Opens a bid by id, fetching it if it isn't on the current page of the list. */
+  const openBidById = async (id: string): Promise<void> => {
+    if (!bids.some((b) => b.id === id)) {
+      const row = await fetchBid(id).catch(() => null);
+      if (row) bids = [toBid(row), ...bids];
+    }
+    selectedBidId = id;
+    screen = 'bid';
+  };
+
   const loadAll = async (): Promise<void> => {
-    await Promise.all([loadUsers(), loadBids(), loadFacets()]);
+    await Promise.all([loadUsers(), loadBids(), loadFacets(), loadInboxCount()]);
   };
 
   // Refetch when the filters change, but only on live data — fixtures filter locally.
@@ -470,6 +489,7 @@
     screen === 'bids' ? 'bids' :
     screen === 'users' ? 'users' :
     screen === 'assistant' ? 'assistant' :
+    screen === 'automation' ? 'bid automation' :
     screen === 'profile' ? 'account / profile' :
     screen === 'billing' ? 'account / subscription' :
     'overview';
@@ -499,6 +519,7 @@
       totalUsers={userTotal}
       openBids={openBidCount}
       planName={planById(plan).name}
+      {inboxCount}
       on:navigate={(e) => (screen = e.detail)}
       on:toggle={() => (collapsed = !collapsed)}
       on:logout={signOut}
@@ -570,6 +591,13 @@
           <NewBid {bids} on:create={(e) => addBid(e.detail)} on:cancel={() => (screen = 'bids')} />
         {:else if screen === 'assistant'}
           <Assistant {users} />
+        {:else if screen === 'automation'}
+          <Automation
+            on:notify={(e) => notify(e.detail)}
+            on:counts={(e) => (inboxCount = e.detail)}
+            on:changed={() => void loadBids()}
+            on:openBid={(e) => void openBidById(e.detail)}
+          />
         {:else if screen === 'profile'}
           <Profile on:notify={(e) => notify(e.detail)} on:billing={() => (screen = 'billing')} on:renamed={(e) => (meName = e.detail)} />
         {:else if screen === 'billing'}

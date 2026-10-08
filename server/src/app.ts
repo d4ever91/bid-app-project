@@ -10,6 +10,7 @@ import bidRoutes from './routes/bids.js';
 import subscriptionRoutes from './routes/subscription.js';
 import assistantRoutes from './routes/assistant.js';
 import overviewRoutes from './routes/overview.js';
+import automationRoutes from './routes/automation.js';
 
 const DB_DOWN_MESSAGE =
   "The API can't reach MongoDB. Start MongoDB (e.g. `npm run db:up`) or check MONGODB_URI in server/.env.";
@@ -61,6 +62,7 @@ export function createApp(): express.Express {
   api.use('/bids', bidRoutes);
   api.use('/subscription', subscriptionRoutes);
   api.use('/assistant', assistantRoutes);
+  api.use('/automation', automationRoutes);
   app.use('/api', api);
 
   app.use((req: Request, res: Response) => {

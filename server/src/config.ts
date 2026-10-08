@@ -47,6 +47,17 @@ export const config = {
   /** Seed demo data when the database has no workspaces yet (never in production). */
   seedOnStart: (process.env.SEED_ON_START ?? 'true') !== 'false',
 
+  /**
+   * Key that encrypts API keys and mailbox passwords stored in MongoDB (32 bytes, base64 or hex).
+   * Required in production; in development one is derived from the JWT secret.
+   */
+  secretsKey: process.env.SECRETS_KEY ?? '',
+  /** Override the AI endpoints (proxies, Azure-compatible gateways, tests). */
+  openaiBaseUrl: (process.env.OPENAI_BASE_URL ?? 'https://api.openai.com/v1').replace(/\/$/, ''),
+  geminiBaseUrl: (process.env.GEMINI_BASE_URL ?? 'https://generativelanguage.googleapis.com/v1beta').replace(/\/$/, ''),
+  /** Set to false to stop the background mailbox poller (e.g. on extra API instances). */
+  mailPolling: (process.env.MAIL_POLLING ?? 'true') !== 'false',
+
   anthropicApiKey: process.env.ANTHROPIC_API_KEY ?? '',
   anthropicModel: process.env.ANTHROPIC_MODEL ?? 'claude-sonnet-5-5'
 };
@@ -55,4 +66,7 @@ export const isProd = config.env === 'production';
 
 if (isProd && !config.jwtSecret) {
   throw new Error('JWT_SECRET must be set in production.');
+}
+if (isProd && !config.secretsKey) {
+  throw new Error('SECRETS_KEY must be set in production (it encrypts stored API keys and mailbox passwords).');
 }

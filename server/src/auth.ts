@@ -42,6 +42,9 @@ export async function ensureSecret(): Promise<void> {
   secret = (await db.settings.findOne({ _id: 'jwt' }))?.secret ?? generated;
 }
 
+/** The JWT signing secret — dev encryption keys are derived from it (see secrets.ts). */
+export const jwtSecret = (): string => secret;
+
 export const sha256 = (value: string): string => crypto.createHash('sha256').update(value).digest('hex');
 
 export function signAccessToken(user: UserDoc): string {

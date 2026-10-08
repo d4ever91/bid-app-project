@@ -3,6 +3,7 @@ import { connect, db } from './db.js';
 import { ensureSecret } from './auth.js';
 import { seed } from './seed.js';
 import { createApp } from './app.js';
+import { startMailPoller } from './automation/pipeline.js';
 
 const redact = (uri: string) => uri.replace(/\/\/([^@/]+)@/, '//***@');
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -22,6 +23,10 @@ async function connectWithRetry(): Promise<void> {
         console.log('[db] Empty database — seeding demo data.');
         const counts = await seed();
         console.log(`[seed] ${Object.entries(counts).map(([k, v]) => `${v} ${k}`).join(', ')}.`);
+      }
+      if (config.mailPolling) {
+        startMailPoller();
+        console.log('[automation] Mailbox poller started (checks enabled workspaces every minute).');
       }
       return;
     } catch (err) {

@@ -1,7 +1,7 @@
 export type Role = 'Owner' | 'Admin' | 'Engineer' | 'Read-only';
 export type RoleFilter = Role | 'All';
 export type Status = 'Active' | 'Invited' | 'Suspended';
-export type Screen = 'login' | 'signup' | 'overview' | 'users' | 'detail' | 'invite' | 'newbid' | 'assistant' | 'bids' | 'bid' | 'profile' | 'billing';
+export type Screen = 'login' | 'signup' | 'overview' | 'users' | 'detail' | 'invite' | 'newbid' | 'assistant' | 'automation' | 'bids' | 'bid' | 'profile' | 'billing';
 export type Density = 'Dense' | 'Balanced' | 'Roomy';
 
 export interface User {
