@@ -293,7 +293,10 @@ On the Subscription screen, plan changes call `POST /subscription` when a sessio
 
 ## Settings → Integrations
 
-**Settings** (sidebar → Account, Owner/Admin only) is the one place to connect every service:
+**Settings** (sidebar → Account, Owner/Admin only) has two tabs: **Integrations** (below) and
+**Bid automation** (on/off switch, which AI reads bid emails, rules, status — see the next section).
+
+**Integrations** is the one place to connect every service:
 
 | Integration | Used for | Get a key |
 | --- | --- | --- |
@@ -309,21 +312,21 @@ the assistant uses the server's `ANTHROPIC_API_KEY` if set, else its built-in an
 
 ## Bid automation: emails → AI → bids
 
-**Bid inbox** (sidebar) watches a Gmail mailbox, has OpenAI or Gemini read each new email, and
+**Bid inbox** (sidebar) shows the emails read so far; it watches a Gmail mailbox, has OpenAI or Gemini read each new email, and
 turns bid opportunities into bids automatically.
 
-**Set up (Settings → Integrations, or Bid inbox → Settings; Owner/Admin only):**
+**Set up (Settings, Owner/Admin only — the Bid inbox's “Automation settings” button goes there too):**
 
-1. **AI provider** — choose OpenAI or Gemini and paste an API key
+1. **Integrations → AI provider** — paste an OpenAI or Gemini API key and choose **Use for bid emails**
    ([OpenAI keys](https://platform.openai.com/api-keys) · [Gemini keys](https://aistudio.google.com/apikey)).
    Pick a model (defaults: `gpt-6-luna`, `gemini-3.5-flash`) and press **Test**.
-2. **Gmail** — enter the address and a Google **app password** (not the normal password):
+2. **Integrations → Gmail** — enter the address and a Google **app password** (not the normal password):
    turn on 2-Step Verification, create one at <https://myaccount.google.com/apppasswords>, and
    make sure IMAP is on (Gmail → Settings → Forwarding and POP/IMAP). Optionally point it at a
-   label such as `Tenders` that a Gmail filter fills. Press **Test connection**.
-3. **Rules** — the confidence at which bids are created automatically (default 75%), how often to
+   label such as `Tenders` that a Gmail filter fills. Press **Test**.
+3. **Bid automation → Rules** — the confidence at which bids are created automatically (default 75%), how often to
    check (default every 5 minutes), and whether the AI may read PDF attachments.
-4. Save, then switch on **Automatic checking**. **Check mailbox now** runs it immediately.
+4. **Save rules**, then switch on **Automatic checking**. **Check mailbox now** in the Bid inbox runs it immediately.
 
 **What happens to each email:**
 

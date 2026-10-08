@@ -39,6 +39,12 @@
   export let maskEmails = false;
 
   let screen: Screen = startScreen;
+  /** Which Settings tab to open (the Bid inbox opens "automation"). */
+  let settingsTab: 'integrations' | 'automation' = 'integrations';
+  function openSettings(tab: 'integrations' | 'automation'): void {
+    settingsTab = tab;
+    screen = 'settings';
+  }
   // Null while signed out or running on local demo data.
   let session: SessionUser | null = null;
 
@@ -490,10 +496,10 @@
     screen === 'bids' ? 'bids' :
     screen === 'users' ? 'users' :
     screen === 'assistant' ? 'assistant' :
-    screen === 'automation' ? 'bid automation' :
+    screen === 'automation' ? 'bid inbox' :
     screen === 'profile' ? 'account / profile' :
     screen === 'billing' ? 'account / subscription' :
-    screen === 'settings' ? 'account / settings / integrations' :
+    screen === 'settings' ? 'account / settings' :
     'overview';
 
   $: onBids = screen === 'bids' || screen === 'bid' || screen === 'newbid';
@@ -522,7 +528,7 @@
       openBids={openBidCount}
       planName={planById(plan).name}
       {inboxCount}
-      on:navigate={(e) => (screen = e.detail)}
+      on:navigate={(e) => (e.detail === 'settings' ? openSettings('integrations') : (screen = e.detail))}
       on:toggle={() => (collapsed = !collapsed)}
       on:logout={signOut}
     />
@@ -599,13 +605,14 @@
             on:counts={(e) => (inboxCount = e.detail)}
             on:changed={() => void loadBids()}
             on:openBid={(e) => void openBidById(e.detail)}
+            on:settings={(e) => openSettings(e.detail)}
           />
         {:else if screen === 'profile'}
           <Profile on:notify={(e) => notify(e.detail)} on:billing={() => (screen = 'billing')} on:renamed={(e) => (meName = e.detail)} />
         {:else if screen === 'billing'}
           <Billing on:notify={(e) => notify(e.detail)} />
         {:else if screen === 'settings'}
-          <Settings on:notify={(e) => notify(e.detail)} on:inbox={() => (screen = 'automation')} />
+          <Settings tab={settingsTab} on:notify={(e) => notify(e.detail)} on:inbox={() => (screen = 'automation')} />
         {/if}
       </div>
     </main>
