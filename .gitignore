@@ -11,6 +11,9 @@ build/
 .env.*
 !.env.example
 
+# API server data (JSON database written at runtime)
+server/data/
+
 # logs
 *.log
 npm-debug.log*

@@ -78,7 +78,7 @@
       const okOwner = owner === 'All' || b.owner === owner;
       const okSector = sector === 'All' || b.sector === sector;
       const okDue = due === 'All' || dueBucket(b) === due;
-      const okQuery = !q || (b.title + ' ' + b.client + ' ' + b.owner + ' ' + b.id).toLowerCase().includes(q);
+      const okQuery = !q || (b.title + ' ' + b.client + ' ' + b.owner + ' ' + (b.ref ?? b.id)).toLowerCase().includes(q);
       return okStage && okOwner && okSector && okDue && okQuery;
     })
     .slice()
@@ -143,7 +143,7 @@
       <div style="{label} margin-bottom: 10px;">Due within 7 days</div>
       <div style="font-size: 30px; font-weight: 600; letter-spacing: -0.02em; line-height: 1;">{urgent.length}</div>
       <div style="{mono} font-size: 11.5px; color: {urgent.length ? '#b23a3a' : 'var(--muted)'}; margin-top: 8px;">
-        {urgent.length ? urgent[0].id + ' closest' : 'nothing imminent'}
+        {urgent.length ? (urgent[0].ref ?? urgent[0].id) + ' closest' : 'nothing imminent'}
       </div>
     </div>
   </div>
@@ -271,7 +271,7 @@
       >
         <div style="min-width: 0;">
           <div style="font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{b.title}</div>
-          <div style="{mono} font-size: 11.5px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{b.id} · {b.client}</div>
+          <div style="{mono} font-size: 11.5px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{b.ref ?? b.id} · {b.client}</div>
         </div>
         <span style="display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: #4a5250;">
           <span style="width: 6px; height: 6px; border-radius: 50%; background: {STAGE_COLOR[b.stage]};"></span>

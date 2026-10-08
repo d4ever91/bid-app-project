@@ -5,10 +5,58 @@ typed component events.
 
 ## Run
 
-    cd svelte-app
-    npm install
-    npm run dev
-    npm run check      # svelte-check type pass
+Two processes: the API on port 4000 and the Vite dev server on port 5173.
+
+    npm install                 # frontend
+    npm run api:install         # API (server/)
+
+    npm run api                 # terminal 1 — API on http://localhost:4000/api
+    npm run dev                 # terminal 2 — app on http://localhost:5173
+
+Open http://localhost:5173 and sign in as `a.mercer@ordinal.io` / `ordinal-dev-password`,
+or create a new workspace from "Create a workspace".
+
+    npm run check               # svelte-check type pass
+    npm run api:test            # API end-to-end tests
+    npm run api:seed            # reset the API's demo data (restart the API afterwards)
+
+## API server (`server/`)
+
+Express 5 API that implements every call in `src/api.ts`. Data lives in a JSON file
+(`server/data/db.json`, git-ignored) so there's no database to install. The first start seeds
+the demo workspaces, users and bids. The route code only touches the `db.*` collections in
+`server/src/db.js`, so moving to Postgres or Mongo later is contained to that layer.
+
+| Area | Endpoints |
+| --- | --- |
+| Auth | `POST /auth/signup` · `/auth/login` · `/auth/refresh` · `/auth/logout` · `/auth/accept-invite` · `/auth/reset-password` · `GET /auth/me` |
+| Users | `GET /users` (q, role, team, status, mfa, archived, sort, page, limit) · `/users/facets` · `/users/:id` · `POST /users` · `PATCH /users/:id` · `/:id/role` · `/:id/status` · `POST /users/:id/reset-password` · `/:id/restore` · `/users/bulk` · `DELETE /users/:id` · `/:id/purge` |
+| Invites | `GET /invites` · `POST /invites` · `POST /invites/:id/resend` · `DELETE /invites/:id` |
+| Bids | `GET /bids` (q, stage, owner, sector, due, archived, sort, page, limit) · `/bids/summary` · `/bids/:id` · `POST /bids` · `PATCH /bids/:id` · `/:id/stage` · `/:id/tasks` · `POST /bids/:id/notes` · `/:id/restore` · `DELETE /bids/:id` |
+| Subscription | `GET /subscription/plans` (public) · `GET /subscription` · `POST /subscription` · `/checkout-session` · `/portal-session` · `GET /subscription/invoices` |
+| Assistant | `GET /assistant/suggestions` · `POST /assistant/chat` |
+
+- **Sessions:** 15-minute JWT access token in the response body; 30-day refresh token in an
+  httpOnly cookie (`path=/api/auth`) that rotates on every refresh. Only token hashes are stored.
+- **Workspaces are isolated:** every query is scoped to the signed-in user's workspace.
+- **Roles:** Owner and Admin manage users and invites; only an Owner can grant or remove Owner
+  or change billing; Read-only can't change bids; nobody can demote, suspend or archive
+  themselves or the last active Owner.
+- **Signup** validates the "About your company" answers (`company.role`, `company.country`,
+  `company.sectors`, `company.bidVolume`) and stores them on the workspace.
+- **Email:** no mail provider is wired up — invite and password-reset links are printed to the
+  API console (`[mail] …`). In development, `POST /users` and `POST /invites` also return the
+  `inviteToken`.
+- **Payments:** no Stripe integration yet. Checkout and portal endpoints return `url: null`
+  with a message, and a "Pay now" signup starts on the 14-day trial instead.
+- **Assistant:** answers from live workspace data out of the box; set `ANTHROPIC_API_KEY` in
+  `server/.env` to route chat to Claude instead.
+- **CORS:** `http://localhost:5173` is allowed (with credentials) for clients that call the API
+  directly; in development the Vite proxy makes requests same-origin anyway. Add production
+  origins to `CORS_ORIGINS`.
+
+Config lives in `server/.env` — copy `server/.env.example`. In production set `NODE_ENV=production`
+and `JWT_SECRET`, or the API refuses to start.
 
 ## Structure
 
@@ -166,8 +214,9 @@ the API is unreachable. The step collects three things beyond the plan: billing 
 count — clamped to the plan's cap — and whether to start a trial or pay now.
 
 - **14-day free trial** — no card; the workspace is created `trialing`.
-- **Pay now** — the API returns a Stripe Checkout URL and the browser redirects; Stripe
-  returns to `?checkout=success|cancelled`, which the app turns into a toast.
+- **Pay now** — designed to return a Stripe Checkout URL that the browser redirects to
+  (Stripe returns to `?checkout=success|cancelled`, shown as a toast). The bundled API has no
+  Stripe integration yet, so it returns no URL and starts the workspace on the trial.
 
 An order summary shows unit price × seats and what's due today, so nothing about the charge
 is a surprise at the Stripe screen.
@@ -185,12 +234,8 @@ refresh-and-replay before the call is allowed to fail, and `restoreSession()` ru
 so a page reload doesn't sign you out.
 
 ```
-cd ../api
-docker compose up -d mongo
-npm install && npm run seed && npm run dev     # http://localhost:4000
-
-cd ../svelte-app
-npm install && npm run dev                     # http://localhost:5173
+npm run api     # http://localhost:4000/api
+npm run dev     # http://localhost:5173
 ```
 
 Seeded accounts (password `ordinal-dev-password` for all of them):

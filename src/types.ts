@@ -63,6 +63,8 @@ export interface BidTask {
 
 export interface Bid {
   id: string;
+  /** Human reference (BID-2418). Live data uses the database id for `id`; fixtures use the reference. */
+  ref?: string;
   title: string;
   client: string;
   sector: string;

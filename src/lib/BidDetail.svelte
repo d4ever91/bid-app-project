@@ -32,7 +32,7 @@
           {bid.stage}
         </span>
       </div>
-      <div style="{mono} font-size: 12px; color: var(--muted); margin-top: 5px;">{bid.id} · {bid.client} · {money(bid.value)} · <span style="color: {dueColor(bid)};">{dueLabel(bid)}</span></div>
+      <div style="{mono} font-size: 12px; color: var(--muted); margin-top: 5px;">{bid.ref ?? bid.id} · {bid.client} · {money(bid.value)} · <span style="color: {dueColor(bid)};">{dueLabel(bid)}</span></div>
     </div>
     <div style="display: flex; gap: 8px;">
       <button class="btn-ghost" type="button" style={btnGhost} on:click={() => dispatch('assign')}>Reassign owner</button>

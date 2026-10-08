@@ -1,0 +1,23 @@
+{
+  "name": "ordinal-bid-api",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Express API for the Ordinal bid console (auth, users, invites, bids, subscription, assistant).",
+  "type": "module",
+  "engines": {
+    "node": ">=18.18"
+  },
+  "scripts": {
+    "dev": "node --watch src/index.js",
+    "start": "node src/index.js",
+    "seed": "node src/seed.js",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.5",
+    "express": "^5.1.0",
+    "jsonwebtoken": "^9.0.2"
+  }
+}

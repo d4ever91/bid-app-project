@@ -383,7 +383,11 @@
             value: Number(String(draft.value).replace(/[^\d]/g, '')) || 0,
             stage: draft.stage,
             ownerName: draft.owner,
-            probability: Number(draft.probability) || 25
+            probability: Number(draft.probability) || 25,
+            due: draft.due.trim() || undefined,
+            daysLeft: draft.due.trim() ? undefined : Number(draft.daysLeft) || undefined,
+            incumbent: draft.incumbent.trim() || undefined,
+            receivedOn: draft.receivedOn.trim() || undefined
           });
           selectedBidId = created.bid._id;
           screen = 'bid';
@@ -402,12 +406,20 @@
     notify(id + ' created — ' + bid.title);
   };
 
-  const finishSignup = (draft: SignupDraft, user: SessionUser | null): void => {
+  const finishSignup = async (draft: SignupDraft, user: SessionUser | null): Promise<void> => {
     plan = draft.plan;
     session = user;
     meName = user?.name ?? draft.name.trim() ?? meName;
     screen = 'overview';
     notify('Workspace created — 14-day ' + planById(draft.plan).name + ' trial started');
+    // A new workspace starts empty — replace the demo fixtures with its real (empty) data.
+    if (user) {
+      bids = [];
+      users = [];
+      bidOwners = [];
+      bidSectors = [];
+      await loadAll();
+    }
   };
 
   $: selected = users.find((u) => u.id === selectedId) ?? users[0];
@@ -418,14 +430,14 @@
     const order = BID_STAGES.filter((s) => s !== 'Lost');
     const next = order[Math.min(order.indexOf(selectedBid.stage) + 1, order.length - 1)];
     if (next === selectedBid.stage) {
-      notify(selectedBid.id + ' is already at the final stage');
+      notify((selectedBid.ref ?? selectedBid.id) + ' is already at the final stage');
       return;
     }
     const before = bids;
     bids = bids.map((b) => (b.id === selectedBid.id ? { ...b, stage: next } : b));
 
     if (!live()) {
-      notify(selectedBid.ref + ' moved to ' + next);
+      notify((selectedBid.ref ?? selectedBid.id) + ' moved to ' + next);
       return;
     }
 
