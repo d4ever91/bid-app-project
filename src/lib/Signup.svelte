@@ -74,6 +74,14 @@
     }
   });
 
+  // Svelte 4 can't parse TypeScript inside markup, so casts live in these handlers.
+  const setCycle = (id: string): void => { cycle = id as BillingCycle; };
+  const setBilling = (id: string): void => { billing = id as 'trial' | 'paid'; };
+  const onSeatsInput = (e: Event): void => {
+    const n = parseInt((e.currentTarget as HTMLInputElement).value.replace(/\D/g, ''), 10);
+    seats = Number.isNaN(n) ? 1 : Math.min(seatCeiling, Math.max(1, n));
+  };
+
   const pickPlan = (id: PlanId): void => {
     draft = { ...draft, plan: id };
     const cap = plans.find((p) => p.id === id)?.seatCap;
@@ -362,7 +370,7 @@
             {#each [['monthly', 'Monthly'], ['annual', 'Annual']] as [id, text] (id)}
               <button
                 type="button"
-                on:click={() => (cycle = id as BillingCycle)}
+                on:click={() => setCycle(id)}
                 style="{mono} padding: 7px 13px; border: none; background: {cycle === id ? 'var(--ink)' : '#fff'}; color: {cycle === id ? '#fff' : 'var(--muted)'}; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; cursor: pointer;"
               >{text}</button>
             {/each}
@@ -409,10 +417,7 @@
                 type="text"
                 inputmode="numeric"
                 value={seats}
-                on:input={(e) => {
-                  const n = parseInt((e.currentTarget as HTMLInputElement).value.replace(/\D/g, ''), 10);
-                  seats = Number.isNaN(n) ? 1 : Math.min(seatCeiling, Math.max(1, n));
-                }}
+                on:input={onSeatsInput}
                 style="{mono} width: 62px; height: 34px; border: none; text-align: center; font-size: 13px; outline: none;"
               />
               <button type="button" aria-label="More seats" on:click={() => (seats = Math.min(seatCeiling, seats + 5))} style="width: 34px; height: 34px; border: none; background: #fff; color: var(--muted); font-size: 15px; cursor: pointer;">+</button>
@@ -423,7 +428,7 @@
             {#each [['trial', '14-day free trial', 'No card required. We will remind you before it ends.'], ['paid', 'Pay now', 'Card details are taken on the next screen, hosted by Stripe.']] as [id, title, note] (id)}
               <button
                 type="button"
-                on:click={() => (billing = id as 'trial' | 'paid')}
+                on:click={() => setBilling(id)}
                 style="text-align: left; border: none; border-bottom: 1px solid var(--line); background: {billing === id ? '#f4f8f7' : '#fff'}; padding: 13px 16px; display: flex; gap: 11px; align-items: flex-start; cursor: pointer;"
               >
                 <span style="width: 15px; height: 15px; flex: none; margin-top: 2px; border-radius: 50%; border: 1px solid {billing === id ? 'var(--accent)' : '#c3c8c9'}; background: {billing === id ? 'var(--accent)' : '#fff'}; box-shadow: {billing === id ? 'inset 0 0 0 2px #fff' : 'none'};"></span>
