@@ -8,7 +8,8 @@
  */
 import type { Bid, BidStage, BillingCycle, CompanyProfile, CompanyType, Plan, PlanId, Role, Status, User } from './types';
 
-const BASE = (import.meta.env.VITE_API_URL as string | undefined) ?? 'http://localhost:4000/api';
+// Defaults to the same-origin /api path, which the Vite dev server proxies to the API.
+const BASE = (import.meta.env.VITE_API_URL as string | undefined) || '/api';
 
 export class ApiError extends Error {
   code: string;

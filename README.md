@@ -203,7 +203,14 @@ Seeded accounts (password `ordinal-dev-password` for all of them):
 | `b.vance@ordinal.io` | Read-only | Ordinal |
 | `rosa@acme-survey.com` | Owner | Acme Survey Co |
 
-Point elsewhere with `VITE_API_URL` in `.env`.
+In development the app calls the same-origin path `/api`, and the Vite dev server
+(`vite.config.ts`) proxies it to `http://localhost:4000`. The browser only ever talks to
+`http://localhost:5173`, so the API needs no CORS setup for local work. Change the proxy
+target with `API_PROXY_TARGET` in `.env`.
+
+For a deployed build served from a different domain than the API, set `VITE_API_URL` to the
+API's full URL and add the frontend's origin to the API's CORS allow-list (with credentials,
+since the refresh token is a cookie).
 
 **Without the API running**, login reports that it can't reach the server and offers
 "Continue with demo data instead" — the screens still work against the local fixtures in
