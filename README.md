@@ -5,13 +5,13 @@ typed component events.
 
 ## Run
 
-Two processes: the API on port 4000 and the Vite dev server on port 5173.
+    npm install
+    npm run dev                 # API on :4000 + app on :5173, together
 
-    npm install                 # frontend
-    npm run api:install         # API (server/)
-
-    npm run api                 # terminal 1 — API on http://localhost:4000/api
-    npm run dev                 # terminal 2 — app on http://localhost:5173
+`npm run dev` starts both the API (`server/`) and the Vite app, and installs the API's
+dependencies the first time. Ctrl+C stops both. To run them separately: `npm run api` and
+`npm run dev:web`. If the app shows "The API server isn't running", the API on port 4000
+isn't up — start it with one of those commands.
 
 Open http://localhost:5173 and sign in as `a.mercer@ordinal.io` / `ordinal-dev-password`,
 or create a new workspace from "Create a workspace".
@@ -234,8 +234,7 @@ refresh-and-replay before the call is allowed to fail, and `restoreSession()` ru
 so a page reload doesn't sign you out.
 
 ```
-npm run api     # http://localhost:4000/api
-npm run dev     # http://localhost:5173
+npm run dev     # API on http://localhost:4000/api + app on http://localhost:5173
 ```
 
 Seeded accounts (password `ordinal-dev-password` for all of them):

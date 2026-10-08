@@ -96,6 +96,14 @@ async function request<T>(path: string, init: RequestInit = {}, retry = true): P
 
   const body = (await res.json().catch(() => null)) as Envelope<T> | null;
 
+  if (!body && res.status >= 500) {
+    throw new ApiError(
+      res.status,
+      'API_UNREACHABLE',
+      "The API server isn't responding. Make sure it's running (`npm run dev` starts it with the app)."
+    );
+  }
+
   if (!res.ok || !body?.success) {
     throw new ApiError(
       res.status,
